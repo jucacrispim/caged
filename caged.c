@@ -10,6 +10,14 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+/*
+  Not defined by older kernel headers (added in Landlock ABI 9).
+  Kept as a fallback so caged compiles against headers predating it.
+*/
+#ifndef LANDLOCK_ACCESS_FS_RESOLVE_UNIX
+#define LANDLOCK_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
+#endif
+
 /* fs access handled by the latest api */
 #define FS_HANDLED                                                             \
   (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE |                \
@@ -19,7 +27,8 @@
    LANDLOCK_ACCESS_FS_MAKE_REG | LANDLOCK_ACCESS_FS_MAKE_SOCK |                \
    LANDLOCK_ACCESS_FS_MAKE_FIFO | LANDLOCK_ACCESS_FS_MAKE_BLOCK |              \
    LANDLOCK_ACCESS_FS_MAKE_SYM | LANDLOCK_ACCESS_FS_REFER |                    \
-   LANDLOCK_ACCESS_FS_TRUNCATE | LANDLOCK_ACCESS_FS_IOCTL_DEV)
+   LANDLOCK_ACCESS_FS_TRUNCATE | LANDLOCK_ACCESS_FS_IOCTL_DEV |                \
+   LANDLOCK_ACCESS_FS_RESOLVE_UNIX)
 
 #define PERMS_READ                                                             \
   (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR |                \
@@ -29,7 +38,7 @@
   (PERMS_READ | LANDLOCK_ACCESS_FS_WRITE_FILE |                                \
    LANDLOCK_ACCESS_FS_REMOVE_DIR | LANDLOCK_ACCESS_FS_REMOVE_FILE |            \
    LANDLOCK_ACCESS_FS_MAKE_DIR | LANDLOCK_ACCESS_FS_MAKE_REG |                 \
-   LANDLOCK_ACCESS_FS_TRUNCATE)
+   LANDLOCK_ACCESS_FS_TRUNCATE | LANDLOCK_ACCESS_FS_RESOLVE_UNIX)
 
 /* fs access only relevant for directories */
 #define PERMS_DIRS_ONLY                                                        \
@@ -134,6 +143,9 @@ static int get_handled_access_fs(long abi) {
   if (abi < 5) {
     handled &= ~LANDLOCK_ACCESS_FS_IOCTL_DEV;
   }
+  if (abi < 9) {
+    handled &= ~LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
+  }
   return handled;
 }
 
@@ -141,6 +153,9 @@ static int get_perms_read_write(long abi) {
   int perms = PERMS_READ_WRITE;
   if (abi < 3) {
     perms &= ~LANDLOCK_ACCESS_FS_TRUNCATE;
+  }
+  if (abi < 9) {
+    perms &= ~LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
   }
   return perms;
 }

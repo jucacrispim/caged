@@ -40,7 +40,7 @@ void test_allow_read_write_access_dir(void) {
   fake.isdir_ret = 1;
   fake.add_rule_ret = 0;
 
-  int r = allow_read_write_access(7, "/some/dir", 3);
+  int r = allow_read_write_access(7, "/some/dir", 9);
 
   assert(r == 0);
   assert(fake.add_calls_count == 1);
@@ -53,7 +53,7 @@ void test_allow_read_write_access_file(void) {
   fake.isdir_ret = 0;
   fake.add_rule_ret = 0;
 
-  int r = allow_read_write_access(7, "/some/file", 3);
+  int r = allow_read_write_access(7, "/some/file", 9);
 
   assert(r == 0);
   assert(fake.add_calls_count == 1);
