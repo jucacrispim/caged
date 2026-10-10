@@ -46,6 +46,9 @@
    LANDLOCK_ACCESS_FS_REMOVE_FILE | LANDLOCK_ACCESS_FS_MAKE_DIR |              \
    LANDLOCK_ACCESS_FS_MAKE_REG)
 
+/* scopes restricted by default (added in Landlock ABI 6) */
+#define SCOPED (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL)
+
 enum caged_return {
   CAGED_OK = 0,
   CAGED_ERR_NO_LANDLOCK,
@@ -62,6 +65,7 @@ struct cmd_opts {
   const char **rw_dir;
   int n_rw;
   int cap_rw;
+  unsigned long released_scopes;
   char **cmd;
 };
 
@@ -160,6 +164,18 @@ static int get_perms_read_write(long abi) {
   return perms;
 }
 
+/*
+  Returns the scopes restricted by default and supported by the abi version
+  available on the host. Scopes were added in ABI 6.
+*/
+static unsigned long get_supported_scopes(long abi) {
+  unsigned long scopes = SCOPED;
+  if (abi < 6) {
+    scopes = 0;
+  }
+  return scopes;
+}
+
 /* Grant some kind of access for a given path */
 static int allow_access(int ruleset_fd, const char *path,
                         struct landlock_path_beneath_attr *pb) {
@@ -249,6 +265,12 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
         return fatal("out of memory");
       }
       i += 2;
+    } else if (strcmp(argv[i], "--allow-scoped-signal") == 0) {
+      opts->released_scopes |= LANDLOCK_SCOPE_SIGNAL;
+      i += 1;
+    } else if (strcmp(argv[i], "--allow-scoped-abstract-unix") == 0) {
+      opts->released_scopes |= LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET;
+      i += 1;
     } else if (strcmp(argv[i], "--") == 0) {
       if (i + 1 >= argc) {
         return fatal("missing command after --");
@@ -275,7 +297,10 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
     return CAGED_ERR_NO_LANDLOCK;
   }
   int handled = get_handled_access_fs(abi);
-  struct landlock_ruleset_attr r_perm = {.handled_access_fs = handled};
+  struct landlock_ruleset_attr r_perm = {
+      .handled_access_fs = handled,
+      .scoped = get_supported_scopes(abi) & ~opts->released_scopes,
+  };
 
   int ruleset = create_ruleset(&r_perm);
   if (ruleset < 0) {

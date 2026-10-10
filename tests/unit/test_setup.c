@@ -24,8 +24,37 @@ void test_setup_ok(void) {
   assert(fake.create_calls_count == 1);
   assert(fake.add_calls_count == 3);
   assert(fake.restrict_calls_count == 1);
+  /* scopes are restricted by default */
+  assert(fake.last_scoped == SCOPED);
 
   cmd_opts_free(&opts);
+}
+
+/* releasing a scope clears its bit from the default mask */
+void test_setup_released_scope(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.released_scopes = LANDLOCK_SCOPE_SIGNAL;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_scoped == (SCOPED & ~LANDLOCK_SCOPE_SIGNAL));
+}
+
+/* below ABI 6 scopes are unsupported, so nothing is restricted */
+void test_setup_scopes_unsupported_abi(void) {
+  reset_fake();
+  fake.abi = 5;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_scoped == 0);
 }
 
 void test_setup_no_landlock(void) {
@@ -132,6 +161,8 @@ void test_strreturn_unknown_error(void) {
 
 int main(void) {
   test_setup_ok();
+  test_setup_released_scope();
+  test_setup_scopes_unsupported_abi();
   test_setup_no_landlock();
   test_setup_create_ruleset_error();
   test_setup_allow_ro_error();

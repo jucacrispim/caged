@@ -59,6 +59,17 @@ void test_get_perms_read_write_perms_abi_gte_9(void) {
   assert(get_perms_read_write(9) == PERMS_READ_WRITE);
 }
 
+void test_get_supported_scopes_abi_lt_6(void) {
+  /* scopes were added in ABI 6. */
+  assert(get_supported_scopes(1) == 0);
+  assert(get_supported_scopes(5) == 0);
+}
+
+void test_get_supported_scopes_abi_gte_6(void) {
+  assert(get_supported_scopes(6) == SCOPED);
+  assert(get_supported_scopes(9) == SCOPED);
+}
+
 int main(void) {
   test_get_handled_access_fs_abi_1();
   test_get_handled_access_fs_abi_gte_2();
@@ -70,6 +81,8 @@ int main(void) {
   test_get_perms_read_write_perms_abi_lt_3();
   test_get_perms_read_write_perms_abi_lt_9();
   test_get_perms_read_write_perms_abi_gte_9();
+  test_get_supported_scopes_abi_lt_6();
+  test_get_supported_scopes_abi_gte_6();
 
   printf("OK\n");
   return 0;

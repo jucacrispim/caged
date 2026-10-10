@@ -194,6 +194,46 @@ void test_rw_out_of_memory(void) {
   cmd_opts_free(&opts);
 }
 
+/* --allow-scoped-signal releases the signal scope */
+void test_allow_scoped_signal(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-scoped-signal", "--", "true", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.released_scopes == LANDLOCK_SCOPE_SIGNAL);
+
+  cmd_opts_free(&opts);
+}
+
+/* --allow-scoped-abstract-unix releases the abstract unix scope */
+void test_allow_scoped_abstract_unix(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-scoped-abstract-unix", "--", "true", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.released_scopes == LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
+
+  cmd_opts_free(&opts);
+}
+
+/* both scope flags combine, mixed with the path options */
+void test_allow_scoped_combined(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-scoped-abstract-unix", "--ro", "/usr",
+                  "--allow-scoped-signal", "--", "true", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(7, argv, &opts) == 0);
+  assert(opts.n_r == 1);
+  assert(strcmp(opts.r_dir[0], "/usr") == 0);
+  assert(opts.released_scopes ==
+         (LANDLOCK_SCOPE_SIGNAL | LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET));
+
+  cmd_opts_free(&opts);
+}
+
 int main(void) {
   test_ro_only_one_value();
   test_rw_only_one_value();
@@ -209,6 +249,9 @@ int main(void) {
   test_many_rw_values();
   test_ro_out_of_memory();
   test_rw_out_of_memory();
+  test_allow_scoped_signal();
+  test_allow_scoped_abstract_unix();
+  test_allow_scoped_combined();
 
   printf("OK\n");
   return 0;

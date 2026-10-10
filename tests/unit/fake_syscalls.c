@@ -30,7 +30,9 @@ long __wrap_syscall(long num, ...) {
     if (attr == NULL && size == 0 && flags == LANDLOCK_CREATE_RULESET_VERSION) {
       ret = fake.abi;
     } else {
+      struct landlock_ruleset_attr *rs = attr;
       fake.create_calls_count++;
+      fake.last_scoped = rs ? rs->scoped : 0;
       if (fake.create_ruleset_ret < 0) {
         errno = fake.create_ruleset_err;
       }

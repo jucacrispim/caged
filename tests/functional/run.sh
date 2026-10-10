@@ -20,6 +20,8 @@ fi
 
 # minimal read perms needed to run basic shell commands
 RO="--ro /usr --ro /bin --ro /lib"
+# extra trees needed to run python3 (dynamic loader, locale, ...)
+RO_PY="$RO --ro /lib64 --ro /etc"
 
 pass=0
 fail=0
@@ -177,6 +179,81 @@ test_unknown_command_exits_1() {
 }
 
 
+# signalling a process outside the sandbox is denied unless the signal scope
+# is allowed with --allow-scoped-signal
+test_scope_signal_denied_by_default() {
+  sleep 30 &
+  victim=$!
+  $CAGED $RO -- sh -c "kill -0 $victim" 2>/dev/null
+  rc=$?
+  kill "$victim" 2>/dev/null
+  wait "$victim" 2>/dev/null
+  check_ne "signal to outside process denied by default" 0 $rc
+}
+
+test_scope_signal_allowed_with_flag() {
+  sleep 30 &
+  victim=$!
+  $CAGED $RO --allow-scoped-signal -- sh -c "kill -0 $victim" 2>/dev/null
+  rc=$?
+  kill "$victim" 2>/dev/null
+  wait "$victim" 2>/dev/null
+  check "signal allowed with --allow-scoped-signal" 0 $rc
+}
+
+# connecting to an abstract unix socket outside the sandbox is denied unless
+# the abstract unix scope is allowed with --allow-scoped-abstract-unix
+start_abs_server() {
+  python3 -c "
+import socket, time
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind('\0$1')
+s.listen(1)
+time.sleep(30)
+" >/dev/null 2>&1 &
+  echo $!
+}
+
+test_scope_abstract_unix_denied_by_default() {
+  name="caged-abs-$$-dd"
+  srv=$(start_abs_server "$name")
+  sleep 1
+  $CAGED $RO_PY -- python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('\0$name')
+except PermissionError:
+    sys.exit(3)
+except OSError:
+    sys.exit(4)
+sys.exit(0)
+" 2>/dev/null
+  rc=$?
+  kill "$srv" 2>/dev/null
+  wait "$srv" 2>/dev/null
+  check "abstract unix connect denied by default" 3 "$rc"
+}
+
+test_scope_abstract_unix_allowed_with_flag() {
+  name="caged-abs-$$-ok"
+  srv=$(start_abs_server "$name")
+  sleep 1
+  $CAGED $RO_PY --allow-scoped-abstract-unix -- python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    s.connect('\0$name')
+except OSError:
+    sys.exit(3)
+sys.exit(0)
+" 2>/dev/null
+  rc=$?
+  kill "$srv" 2>/dev/null
+  wait "$srv" 2>/dev/null
+  check "abstract unix connect allowed with --allow-scoped-abstract-unix" 0 "$rc"
+}
+
 main() {
   test_read_file_allowed
   test_read_outside_denied
@@ -198,6 +275,11 @@ main() {
   test_nonexistent_path_exits_1
   test_missing_program_exits_1
   test_unknown_command_exits_1
+
+  test_scope_signal_denied_by_default
+  test_scope_signal_allowed_with_flag
+  test_scope_abstract_unix_denied_by_default
+  test_scope_abstract_unix_allowed_with_flag
 
   printf '\n%d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

@@ -32,6 +32,7 @@ struct fake_context {
   int close_calls_count;
   long last_allowed_access;
   int last_parent_fd;
+  unsigned long last_scoped;
   int create_calls_count;
   int add_calls_count;
   int restrict_calls_count;
