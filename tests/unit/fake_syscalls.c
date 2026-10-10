@@ -33,6 +33,7 @@ long __wrap_syscall(long num, ...) {
       struct landlock_ruleset_attr *rs = attr;
       fake.create_calls_count++;
       fake.last_scoped = rs ? rs->scoped : 0;
+      fake.last_handled_net = rs ? rs->handled_access_net : 0;
       if (fake.create_ruleset_ret < 0) {
         errno = fake.create_ruleset_err;
       }
@@ -43,14 +44,20 @@ long __wrap_syscall(long num, ...) {
   case SYS_landlock_add_rule: {
     int fd = va_arg(ap, int);
     int rule_type = va_arg(ap, int);
-    struct landlock_path_beneath_attr *pb = va_arg(ap, void *);
+    void *attr = va_arg(ap, void *);
     int flags = va_arg(ap, int);
     (void)fd;
-    (void)rule_type;
     (void)flags;
     fake.add_calls_count++;
-    fake.last_allowed_access = (long)pb->allowed_access;
-    fake.last_parent_fd = pb->parent_fd;
+    if (rule_type == LANDLOCK_RULE_NET_PORT) {
+      struct landlock_net_port_attr *np = attr;
+      fake.last_net_allowed_access = (long)np->allowed_access;
+      fake.last_net_port = (long)np->port;
+    } else {
+      struct landlock_path_beneath_attr *pb = attr;
+      fake.last_allowed_access = (long)pb->allowed_access;
+      fake.last_parent_fd = pb->parent_fd;
+    }
     if (fake.add_rule_ret < 0) {
       errno = fake.add_rule_err;
     }

@@ -26,8 +26,93 @@ void test_setup_ok(void) {
   assert(fake.restrict_calls_count == 1);
   /* scopes are restricted by default */
   assert(fake.last_scoped == SCOPED);
+  /* net is handled (and thus denied) by default */
+  assert(fake.last_handled_net == NET_HANDLED);
 
   cmd_opts_free(&opts);
+}
+
+/* releasing the whole connect access clears its bit from the handled mask */
+void test_setup_released_net_general(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.released_net = LANDLOCK_ACCESS_NET_CONNECT_TCP;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_handled_net ==
+         ((unsigned long)NET_HANDLED & ~LANDLOCK_ACCESS_NET_CONNECT_TCP));
+}
+
+/* --allow-*-port adds a rule per port */
+void test_setup_net_port_rules(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.add_rule_ret = 0;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
+  push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.add_calls_count == 2);
+  /* net stays governed when only individual ports are granted */
+  assert(fake.last_handled_net == NET_HANDLED);
+  /* last rule is the bind one */
+  assert(fake.last_net_allowed_access == LANDLOCK_ACCESS_NET_BIND_TCP);
+  assert(fake.last_net_port == 80);
+
+  cmd_opts_free(&opts);
+}
+
+void test_setup_connect_rule_error(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.add_rule_ret = -1;
+  fake.add_rule_err = EINVAL;
+
+  struct cmd_opts opts = {0};
+  push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
+
+  assert(caged_setup(&opts) == CAGED_ERR_CONNECT_ACCESS);
+  assert(fake.restrict_calls_count == 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_setup_bind_rule_error(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.add_rule_ret = -1;
+  fake.add_rule_err = EINVAL;
+
+  struct cmd_opts opts = {0};
+  push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
+
+  assert(caged_setup(&opts) == CAGED_ERR_BIND_ACCESS);
+  assert(fake.restrict_calls_count == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* below ABI 4 net is unsupported, so nothing is handled */
+void test_setup_net_unsupported_abi(void) {
+  reset_fake();
+  fake.abi = 3;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_handled_net == 0);
 }
 
 /* releasing a scope clears its bit from the default mask */
@@ -146,6 +231,8 @@ void test_strreturn(void) {
       CAGED_ERR_CREATE_RULESET,
       CAGED_ERR_READ_ACCESS,
       CAGED_ERR_RW_ACCESS,
+      CAGED_ERR_CONNECT_ACCESS,
+      CAGED_ERR_BIND_ACCESS,
       CAGED_ERR_RESTRICT_SELF,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
@@ -161,6 +248,11 @@ void test_strreturn_unknown_error(void) {
 
 int main(void) {
   test_setup_ok();
+  test_setup_released_net_general();
+  test_setup_net_port_rules();
+  test_setup_connect_rule_error();
+  test_setup_bind_rule_error();
+  test_setup_net_unsupported_abi();
   test_setup_released_scope();
   test_setup_scopes_unsupported_abi();
   test_setup_no_landlock();

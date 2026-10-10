@@ -70,6 +70,18 @@ void test_get_supported_scopes_abi_gte_6(void) {
   assert(get_supported_scopes(9) == SCOPED);
 }
 
+void test_get_handled_access_net_abi_lt_4(void) {
+  /* net accesses were added in ABI 4. */
+  assert(get_handled_access_net(1) == 0);
+  assert(get_handled_access_net(3) == 0);
+}
+
+void test_get_handled_access_net_abi_gte_4(void) {
+  assert(get_handled_access_net(4) == NET_HANDLED);
+  assert(get_handled_access_net(6) == NET_HANDLED);
+  assert(get_handled_access_net(9) == NET_HANDLED);
+}
+
 int main(void) {
   test_get_handled_access_fs_abi_1();
   test_get_handled_access_fs_abi_gte_2();
@@ -83,6 +95,8 @@ int main(void) {
   test_get_perms_read_write_perms_abi_gte_9();
   test_get_supported_scopes_abi_lt_6();
   test_get_supported_scopes_abi_gte_6();
+  test_get_handled_access_net_abi_lt_4();
+  test_get_handled_access_net_abi_gte_4();
 
   printf("OK\n");
   return 0;

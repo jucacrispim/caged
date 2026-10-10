@@ -254,6 +254,113 @@ sys.exit(0)
   check "abstract unix connect allowed with --allow-scoped-abstract-unix" 0 "$rc"
 }
 
+
+# starts a TCP server on 127.0.0.1 with an ephemeral port; sets TCP_PID/TCP_PORT
+# used for the NET access tests
+start_tcp_server() {
+  portfile=$(mktemp)
+  python3 -c "
+import socket, time
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', 0))
+s.listen(1)
+open('$portfile', 'w').write(str(s.getsockname()[1]))
+s.settimeout(30)
+try:
+    s.accept()
+except Exception:
+    pass
+" >/dev/null 2>&1 &
+  TCP_PID=$!
+  i=0
+  while [ ! -s "$portfile" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  TCP_PORT=$(cat "$portfile")
+  rm -f "$portfile"
+}
+
+stop_tcp_server() {
+  kill "$TCP_PID" 2>/dev/null
+  wait "$TCP_PID" 2>/dev/null
+}
+
+# connects from inside the sandbox; $1 = net flags (may be empty), $2 = port
+# exit 3 = PermissionError (denied), exit 4 = other error, exit 0 = connected
+tcp_connect_rc() {
+  $CAGED $RO_PY $1 -- python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.connect(('127.0.0.1', $2))
+except PermissionError:
+    sys.exit(3)
+except OSError:
+    sys.exit(4)
+sys.exit(0)
+" 2>/dev/null
+}
+
+# binds to an ephemeral port from inside the sandbox; $1 = net flags
+# exit 3 = PermissionError (denied), exit 4 = other error, exit 0 = bound
+tcp_bind_rc() {
+  $CAGED $RO_PY $1 -- python3 -c "
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.bind(('127.0.0.1', 0))
+except PermissionError:
+    sys.exit(3)
+except OSError:
+    sys.exit(4)
+sys.exit(0)
+" 2>/dev/null
+}
+
+test_net_connect_denied_by_default() {
+  start_tcp_server
+  tcp_connect_rc "" "$TCP_PORT"
+  rc=$?
+  stop_tcp_server
+  check "tcp connect denied by default" 3 "$rc"
+}
+
+test_net_connect_allowed_by_port() {
+  start_tcp_server
+  tcp_connect_rc "--allow-connect-port $TCP_PORT" "$TCP_PORT"
+  rc=$?
+  stop_tcp_server
+  check "tcp connect allowed with --allow-connect-port" 0 "$rc"
+}
+
+test_net_connect_allowed_general() {
+  start_tcp_server
+  tcp_connect_rc "--allow-connect-tcp" "$TCP_PORT"
+  rc=$?
+  stop_tcp_server
+  check "tcp connect allowed with --allow-connect-tcp" 0 "$rc"
+}
+
+test_net_bind_denied_by_default() {
+  tcp_bind_rc ""
+  rc=$?
+  check "tcp bind denied by default" 3 "$rc"
+}
+
+test_net_bind_allowed_by_port() {
+  tcp_bind_rc "--allow-bind-port 0"
+  rc=$?
+  check "tcp bind allowed with --allow-bind-port 0" 0 "$rc"
+}
+
+test_net_bind_allowed_general() {
+  tcp_bind_rc "--allow-bind-tcp"
+  rc=$?
+  check "tcp bind allowed with --allow-bind-tcp" 0 "$rc"
+}
+
 main() {
   test_read_file_allowed
   test_read_outside_denied
@@ -280,6 +387,13 @@ main() {
   test_scope_signal_allowed_with_flag
   test_scope_abstract_unix_denied_by_default
   test_scope_abstract_unix_allowed_with_flag
+
+  test_net_connect_denied_by_default
+  test_net_connect_allowed_by_port
+  test_net_connect_allowed_general
+  test_net_bind_denied_by_default
+  test_net_bind_allowed_by_port
+  test_net_bind_allowed_general
 
   printf '\n%d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

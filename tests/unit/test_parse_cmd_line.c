@@ -234,6 +234,191 @@ void test_allow_scoped_combined(void) {
   cmd_opts_free(&opts);
 }
 
+/* --allow-connect-tcp releases the whole connect access */
+void test_allow_connect_tcp(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-connect-tcp", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.released_net == LANDLOCK_ACCESS_NET_CONNECT_TCP);
+
+  cmd_opts_free(&opts);
+}
+
+/* --allow-bind-tcp releases the whole bind access */
+void test_allow_bind_tcp(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-bind-tcp", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.released_net == LANDLOCK_ACCESS_NET_BIND_TCP);
+
+  cmd_opts_free(&opts);
+}
+
+/* --allow-connect-port accumulates ports, order preserved */
+void test_allow_connect_port(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",           "--allow-connect-port", "443",
+                  "--allow-connect-port", "80", "--", "true", NULL};
+
+  assert(parse_cmd_line(9, argv, &opts) == 0);
+  assert(opts.n_connect == 2);
+  assert(opts.connect_ports[0] == 443);
+  assert(opts.connect_ports[1] == 80);
+  assert(opts.released_net == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* --allow-bind-port accepts port 0 (ephemeral range) */
+void test_allow_bind_port(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-bind-port", "0", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(opts.n_bind == 1);
+  assert(opts.bind_ports[0] == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* net flags mix with path options */
+void test_allow_net_combined(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",
+                  "--allow-connect-port",
+                  "443",
+                  "--ro",
+                  "/usr",
+                  "--allow-bind-port",
+                  "80",
+                  "--",
+                  "true",
+                  NULL};
+
+  assert(parse_cmd_line(10, argv, &opts) == 0);
+  assert(opts.n_connect == 1);
+  assert(opts.n_bind == 1);
+  assert(opts.n_r == 1);
+  assert(strcmp(opts.r_dir[0], "/usr") == 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_allow_connect_port_missing_value(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-connect-port", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_allow_bind_port_missing_value(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-bind-port", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_allow_connect_port_invalid(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-connect-port", "abc", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_allow_bind_port_invalid(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-bind-port", "70000", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* general flag then port flag for the same direction -> usage error */
+void test_allow_connect_conflict(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",     "--allow-connect-tcp", "--allow-connect-port",
+                  "443", "--", "true", NULL};
+
+  assert(parse_cmd_line(7, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* port flag then general flag for the same direction -> usage error */
+void test_allow_connect_conflict_reverse(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",     "--allow-connect-port", "443",
+                  "--allow-connect-tcp", "--", "true", NULL};
+
+  assert(parse_cmd_line(7, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* same conflict for bind */
+void test_allow_bind_conflict(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",     "--allow-bind-tcp", "--allow-bind-port",
+                  "80", "--", "true", NULL};
+
+  assert(parse_cmd_line(7, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_allow_bind_conflict_reverse(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",     "--allow-bind-port", "80",
+                  "--allow-bind-tcp", "--", "true", NULL};
+
+  assert(parse_cmd_line(7, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* allocation failure while growing the connect ports list -> error */
+void test_connect_port_out_of_memory(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-connect-port", "443", "--", "true", NULL};
+
+  reset_fake();
+  fake.fail_realloc = 1;
+  fake.realloc_err = ENOMEM;
+
+  errno = 0;
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.n_connect == 0);
+  assert(errno == ENOMEM);
+
+  cmd_opts_free(&opts);
+}
+
+/* allocation failure while growing the bind ports list -> error */
+void test_bind_port_out_of_memory(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-bind-port", "80", "--", "true", NULL};
+
+  reset_fake();
+  fake.fail_realloc = 1;
+  fake.realloc_err = ENOMEM;
+
+  errno = 0;
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.n_bind == 0);
+  assert(errno == ENOMEM);
+
+  cmd_opts_free(&opts);
+}
+
 int main(void) {
   test_ro_only_one_value();
   test_rw_only_one_value();
@@ -252,6 +437,21 @@ int main(void) {
   test_allow_scoped_signal();
   test_allow_scoped_abstract_unix();
   test_allow_scoped_combined();
+  test_allow_connect_tcp();
+  test_allow_bind_tcp();
+  test_allow_connect_port();
+  test_allow_bind_port();
+  test_allow_net_combined();
+  test_allow_connect_port_missing_value();
+  test_allow_bind_port_missing_value();
+  test_allow_connect_port_invalid();
+  test_allow_bind_port_invalid();
+  test_allow_connect_conflict();
+  test_allow_connect_conflict_reverse();
+  test_allow_bind_conflict();
+  test_allow_bind_conflict_reverse();
+  test_connect_port_out_of_memory();
+  test_bind_port_out_of_memory();
 
   printf("OK\n");
   return 0;

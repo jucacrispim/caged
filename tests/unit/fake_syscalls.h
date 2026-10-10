@@ -33,6 +33,9 @@ struct fake_context {
   long last_allowed_access;
   int last_parent_fd;
   unsigned long last_scoped;
+  unsigned long last_handled_net;
+  long last_net_allowed_access;
+  long last_net_port;
   int create_calls_count;
   int add_calls_count;
   int restrict_calls_count;

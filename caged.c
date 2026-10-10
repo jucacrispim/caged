@@ -49,12 +49,17 @@
 /* scopes restricted by default (added in Landlock ABI 6) */
 #define SCOPED (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL)
 
+/* net access handled by the latest api (added in Landlock ABI 4) */
+#define NET_HANDLED (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
+
 enum caged_return {
   CAGED_OK = 0,
   CAGED_ERR_NO_LANDLOCK,
   CAGED_ERR_CREATE_RULESET,
   CAGED_ERR_READ_ACCESS,
   CAGED_ERR_RW_ACCESS,
+  CAGED_ERR_CONNECT_ACCESS,
+  CAGED_ERR_BIND_ACCESS,
   CAGED_ERR_RESTRICT_SELF,
 };
 
@@ -66,6 +71,13 @@ struct cmd_opts {
   int n_rw;
   int cap_rw;
   unsigned long released_scopes;
+  unsigned long released_net;
+  unsigned short *connect_ports;
+  int n_connect;
+  int cap_connect;
+  unsigned short *bind_ports;
+  int n_bind;
+  int cap_bind;
   char **cmd;
 };
 
@@ -92,12 +104,54 @@ static int push_path(const char ***list, int *n, int *cap, const char *path) {
 static void cmd_opts_free(struct cmd_opts *opts) {
   free((void *)opts->r_dir);
   free((void *)opts->rw_dir);
+  free(opts->connect_ports);
+  free(opts->bind_ports);
   opts->r_dir = NULL;
   opts->rw_dir = NULL;
+  opts->connect_ports = NULL;
+  opts->bind_ports = NULL;
   opts->n_r = 0;
   opts->n_rw = 0;
+  opts->n_connect = 0;
+  opts->n_bind = 0;
   opts->cap_r = 0;
   opts->cap_rw = 0;
+  opts->cap_connect = 0;
+  opts->cap_bind = 0;
+}
+
+/*
+  Appends `port` to a dynamic list, growing the backing array (doubling its
+  capacity) when it is full. Returns 0 on success, -1 on allocation failure.
+*/
+static int push_port(unsigned short **list, int *n, int *cap,
+                     unsigned short port) {
+  if (*n == *cap) {
+    int new_cap = *cap ? *cap * 2 : 4;
+    unsigned short *grown = realloc(*list, (size_t)new_cap * sizeof **list);
+    if (grown == NULL) {
+      return -1;
+    }
+    *list = grown;
+    *cap = new_cap;
+  }
+  (*list)[(*n)++] = port;
+  return 0;
+}
+
+/*
+  Parses a decimal port number into `out`. Returns 0 on success, -1 when the
+  string is not a valid port in the 0..65535 range.
+*/
+static int parse_port(const char *s, unsigned short *out) {
+  char *end;
+  errno = 0;
+  unsigned long v = strtoul(s, &end, 10);
+  if (end == s || *end != '\0' || errno != 0 || v > 65535) {
+    return -1;
+  }
+  *out = (unsigned short)v;
+  return 0;
 }
 
 /*
@@ -176,6 +230,18 @@ static unsigned long get_supported_scopes(long abi) {
   return scopes;
 }
 
+/*
+  Returns the net accesses supported by the abi version available on the host.
+  Net accesses were added in ABI 4.
+*/
+static int get_handled_access_net(long abi) {
+  int handled = NET_HANDLED;
+  if (abi < 4) {
+    handled = 0;
+  }
+  return handled;
+}
+
 /* Grant some kind of access for a given path */
 static int allow_access(int ruleset_fd, const char *path,
                         struct landlock_path_beneath_attr *pb) {
@@ -215,6 +281,27 @@ static int allow_read_write_access(int ruleset_fd, const char *path, long abi) {
   return allow_access(ruleset_fd, path, &pb);
 }
 
+/* Adds a net rule granting the given access for a single port. */
+static int add_net_rule(int ruleset_fd, unsigned long allowed_access,
+                        unsigned short port) {
+  struct landlock_net_port_attr attr = {
+      .allowed_access = allowed_access,
+      .port = port,
+  };
+  return syscall(SYS_landlock_add_rule, ruleset_fd, LANDLOCK_RULE_NET_PORT,
+                 &attr, 0);
+}
+
+/* Grant the ability to connect to the given port. */
+static int allow_net_connect_access(int ruleset_fd, unsigned short port) {
+  return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_CONNECT_TCP, port);
+}
+
+/* Grant the ability to bind the given port. */
+static int allow_net_bind_access(int ruleset_fd, unsigned short port) {
+  return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_BIND_TCP, port);
+}
+
 static const char *caged_strreturn(enum caged_return r) {
   switch (r) {
   case CAGED_OK:
@@ -227,6 +314,10 @@ static const char *caged_strreturn(enum caged_return r) {
     return "error allowing read access";
   case CAGED_ERR_RW_ACCESS:
     return "error allowing read_write access";
+  case CAGED_ERR_CONNECT_ACCESS:
+    return "error allowing connect access";
+  case CAGED_ERR_BIND_ACCESS:
+    return "error allowing bind access";
   case CAGED_ERR_RESTRICT_SELF:
     return "error restricting self";
   }
@@ -271,6 +362,50 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
     } else if (strcmp(argv[i], "--allow-scoped-abstract-unix") == 0) {
       opts->released_scopes |= LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET;
       i += 1;
+    } else if (strcmp(argv[i], "--allow-connect-tcp") == 0) {
+      if (opts->n_connect > 0) {
+        return fatal("--allow-connect-tcp conflicts with --allow-connect-port");
+      }
+      opts->released_net |= LANDLOCK_ACCESS_NET_CONNECT_TCP;
+      i += 1;
+    } else if (strcmp(argv[i], "--allow-bind-tcp") == 0) {
+      if (opts->n_bind > 0) {
+        return fatal("--allow-bind-tcp conflicts with --allow-bind-port");
+      }
+      opts->released_net |= LANDLOCK_ACCESS_NET_BIND_TCP;
+      i += 1;
+    } else if (strcmp(argv[i], "--allow-connect-port") == 0) {
+      unsigned short port;
+      if (i + 1 >= argc) {
+        return fatal("--allow-connect-port must have a value");
+      }
+      if (opts->released_net & LANDLOCK_ACCESS_NET_CONNECT_TCP) {
+        return fatal("--allow-connect-port conflicts with --allow-connect-tcp");
+      }
+      if (parse_port(argv[i + 1], &port) < 0) {
+        return fatal("--allow-connect-port must be a port number (0..65535)");
+      }
+      if (push_port(&opts->connect_ports, &opts->n_connect,
+                    &opts->cap_connect, port) < 0) {
+        return fatal("out of memory");
+      }
+      i += 2;
+    } else if (strcmp(argv[i], "--allow-bind-port") == 0) {
+      unsigned short port;
+      if (i + 1 >= argc) {
+        return fatal("--allow-bind-port must have a value");
+      }
+      if (opts->released_net & LANDLOCK_ACCESS_NET_BIND_TCP) {
+        return fatal("--allow-bind-port conflicts with --allow-bind-tcp");
+      }
+      if (parse_port(argv[i + 1], &port) < 0) {
+        return fatal("--allow-bind-port must be a port number (0..65535)");
+      }
+      if (push_port(&opts->bind_ports, &opts->n_bind, &opts->cap_bind, port) <
+          0) {
+        return fatal("out of memory");
+      }
+      i += 2;
     } else if (strcmp(argv[i], "--") == 0) {
       if (i + 1 >= argc) {
         return fatal("missing command after --");
@@ -297,11 +432,12 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
     return CAGED_ERR_NO_LANDLOCK;
   }
   int handled = get_handled_access_fs(abi);
+  int handled_net = get_handled_access_net(abi);
   struct landlock_ruleset_attr r_perm = {
       .handled_access_fs = handled,
+      .handled_access_net = (unsigned long)handled_net & ~opts->released_net,
       .scoped = get_supported_scopes(abi) & ~opts->released_scopes,
   };
-
   int ruleset = create_ruleset(&r_perm);
   if (ruleset < 0) {
     return CAGED_ERR_CREATE_RULESET;
@@ -314,6 +450,16 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
   for (int k = 0; k < opts->n_rw; k++) {
     if (allow_read_write_access(ruleset, opts->rw_dir[k], abi) < 0) {
       return CAGED_ERR_RW_ACCESS;
+    }
+  }
+  for (int k = 0; k < opts->n_connect; k++) {
+    if (allow_net_connect_access(ruleset, opts->connect_ports[k]) < 0) {
+      return CAGED_ERR_CONNECT_ACCESS;
+    }
+  }
+  for (int k = 0; k < opts->n_bind; k++) {
+    if (allow_net_bind_access(ruleset, opts->bind_ports[k]) < 0) {
+      return CAGED_ERR_BIND_ACCESS;
     }
   }
   if (restrict_self(ruleset) < 0) {
