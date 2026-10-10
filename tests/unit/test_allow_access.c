@@ -1,0 +1,120 @@
+#define main caged_program_main
+#include "../../caged.c"
+#undef main
+#include "fake_syscalls.h"
+#include <assert.h>
+#include <errno.h>
+
+void test_allow_read_access_dir(void) {
+  reset_fake();
+  fake.stat_ret = 0;
+  fake.isdir_ret = 1;
+  fake.add_rule_ret = 0;
+
+  int r = allow_read_access(7, "/some/dir");
+
+  assert(r == 0);
+  assert(fake.open_calls_count == 1);
+  assert(fake.add_calls_count == 1);
+  assert(fake.last_allowed_access == PERMS_READ);
+  assert(fake.last_parent_fd == 9876);
+}
+
+void test_allow_read_access_file(void) {
+  reset_fake();
+  fake.stat_ret = 0;
+  fake.isdir_ret = 0;
+  fake.add_rule_ret = 0;
+
+  int r = allow_read_access(7, "/some/file");
+
+  assert(r == 0);
+  assert(fake.add_calls_count == 1);
+  // read perms for file exclude the dirs only perms
+  assert(fake.last_allowed_access == (PERMS_READ & ~PERMS_DIRS_ONLY));
+}
+
+void test_allow_read_write_access_dir(void) {
+  reset_fake();
+  fake.stat_ret = 0;
+  fake.isdir_ret = 1;
+  fake.add_rule_ret = 0;
+
+  int r = allow_read_write_access(7, "/some/dir", 3);
+
+  assert(r == 0);
+  assert(fake.add_calls_count == 1);
+  assert(fake.last_allowed_access == PERMS_READ_WRITE);
+}
+
+void test_allow_read_write_access_file(void) {
+  reset_fake();
+  fake.stat_ret = 0;
+  fake.isdir_ret = 0;
+  fake.add_rule_ret = 0;
+
+  int r = allow_read_write_access(7, "/some/file", 3);
+
+  assert(r == 0);
+  assert(fake.add_calls_count == 1);
+  assert(fake.last_allowed_access == (PERMS_READ_WRITE & ~PERMS_DIRS_ONLY));
+}
+
+void test_allow_access_open_fail(void) {
+  reset_fake();
+  fake.open_ret = -1;
+  fake.open_err = ENOENT;
+  fake.add_rule_ret = 0;
+
+  errno = 0;
+  int r = allow_read_access(7, "/nonexistent");
+
+  assert(r == -1);
+  assert(errno == ENOENT);
+  assert(fake.open_calls_count == 1);
+  assert(fake.add_calls_count == 0);
+}
+
+void test_allow_access_fstat_fail(void) {
+  reset_fake();
+  fake.stat_ret = -1;
+  fake.stat_err = EACCES;
+  fake.add_rule_ret = 0;
+
+  errno = 0;
+  int r = allow_read_access(7, "/x");
+
+  assert(r == -1);
+  assert(errno == EACCES);
+  assert(fake.add_calls_count == 0);
+  assert(fake.close_calls_count == 1);
+}
+
+void test_allow_access_add_rule_fail(void) {
+  reset_fake();
+  fake.stat_ret = 0;
+  fake.isdir_ret = 1;
+  fake.add_rule_ret = -1;
+  fake.add_rule_err = EINVAL;
+
+  errno = 0;
+  int r = allow_read_access(7, "/x");
+
+  assert(r == -1);
+  assert(errno == EINVAL);
+  assert(fake.add_calls_count == 1);
+  assert(fake.close_calls_count == 1);
+}
+
+int main(void) {
+  test_allow_read_access_dir();
+  test_allow_read_access_file();
+  test_allow_read_write_access_dir();
+  test_allow_read_write_access_file();
+  test_allow_access_open_fail();
+  test_allow_access_fstat_fail();
+  test_allow_access_add_rule_fail();
+
+  printf("OK\n");
+  return 0;
+}
