@@ -70,6 +70,16 @@ long __wrap_syscall(long num, ...) {
 extern int __real_open(const char *path, int flags, ...);
 extern int __real_fstat(int fd, struct stat *st);
 extern int __real_close(int fd);
+extern void *__real_realloc(void *ptr, size_t size);
+
+/* only fails when the test asks for it; otherwise delegates to the real one */
+void *__wrap_realloc(void *ptr, size_t size) {
+  if (fake.fail_realloc) {
+    errno = fake.realloc_err;
+    return NULL;
+  }
+  return __real_realloc(ptr, size);
+}
 
 int __wrap_open(const char *path, int flags, ...) {
   /* caged uses O_PATH on open. If it is not used, return the real stuff*/

@@ -1,7 +1,7 @@
 CC          := gcc
 CFLAGS      := -Wall -Wextra -g
 TEST_CFLAGS := $(CFLAGS) -O0 -U_FORTIFY_SOURCE -fno-builtin
-WRAP        := -Wl,--wrap=syscall -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=close -Wl,--wrap=prctl
+WRAP        := -Wl,--wrap=syscall -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=close -Wl,--wrap=prctl -Wl,--wrap=realloc
 BUILD_DIR   := build
 UNIT        := tests/unit
 COV_DIR    := $(BUILD_DIR)/cov

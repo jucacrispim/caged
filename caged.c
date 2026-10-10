@@ -10,7 +10,6 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#define MAX_PATHS 32
 /* fs access handled by the latest api */
 #define FS_HANDLED                                                             \
   (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE |                \
@@ -48,12 +47,45 @@ enum caged_return {
 };
 
 struct cmd_opts {
-  const char *r_dir[MAX_PATHS];
+  const char **r_dir;
   int n_r;
-  const char *rw_dir[MAX_PATHS];
+  int cap_r;
+  const char **rw_dir;
   int n_rw;
+  int cap_rw;
   char **cmd;
 };
+
+/*
+  Appends `path` to a dynamic list, growing the backing array (doubling its
+  capacity) when it is full. Returns 0 on success, -1 on allocation failure.
+*/
+static int push_path(const char ***list, int *n, int *cap, const char *path) {
+  if (*n == *cap) {
+    int new_cap = *cap ? *cap * 2 : 4;
+    const char **grown =
+        realloc((void *)*list, (size_t)new_cap * sizeof **list);
+    if (grown == NULL) {
+      return -1;
+    }
+    *list = grown;
+    *cap = new_cap;
+  }
+  (*list)[(*n)++] = path;
+  return 0;
+}
+
+/* Releases the memory held by the lists of a cmd_opts. */
+static void cmd_opts_free(struct cmd_opts *opts) {
+  free((void *)opts->r_dir);
+  free((void *)opts->rw_dir);
+  opts->r_dir = NULL;
+  opts->rw_dir = NULL;
+  opts->n_r = 0;
+  opts->n_rw = 0;
+  opts->cap_r = 0;
+  opts->cap_rw = 0;
+}
 
 /*
   Creates a new landlock ruleset.
@@ -189,19 +221,18 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
       if (i + 1 >= argc) {
         return fatal("--ro must have a value");
       }
-      if (opts->n_r >= MAX_PATHS) {
-        return fatal("too many ro dirs");
+      if (push_path(&opts->r_dir, &opts->n_r, &opts->cap_r, argv[i + 1]) < 0) {
+        return fatal("out of memory");
       }
-      opts->r_dir[opts->n_r++] = argv[i + 1];
       i += 2;
     } else if (strcmp(argv[i], "--rw") == 0) {
       if (i + 1 >= argc) {
         return fatal("--rw must have a value");
       }
-      if (opts->n_rw >= MAX_PATHS) {
-        return fatal("too many rw dirs");
+      if (push_path(&opts->rw_dir, &opts->n_rw, &opts->cap_rw, argv[i + 1]) <
+          0) {
+        return fatal("out of memory");
       }
-      opts->rw_dir[opts->n_rw++] = argv[i + 1];
       i += 2;
     } else if (strcmp(argv[i], "--") == 0) {
       if (i + 1 >= argc) {
@@ -256,6 +287,7 @@ int main(int argc, char *argv[]) {
   struct cmd_opts opts = {0};
 
   if (parse_cmd_line(argc, argv, &opts) < 0) {
+    cmd_opts_free(&opts);
     return 2;
   }
 
@@ -264,6 +296,7 @@ int main(int argc, char *argv[]) {
     die(caged_strreturn(r));
   }
 
+  cmd_opts_free(&opts);
   if (execvp(opts.cmd[0], opts.cmd) < 0) {
     die("error execvp");
   }

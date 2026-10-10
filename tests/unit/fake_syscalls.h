@@ -23,6 +23,8 @@ struct fake_context {
   int add_rule_err;
   int prctl_ret;
   int prctl_err;
+  int fail_realloc;
+  int realloc_err;
 
   /* spies */
   struct open_call last_open;

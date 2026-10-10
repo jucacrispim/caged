@@ -16,16 +16,16 @@ void test_setup_ok(void) {
   fake.restrict_self_ret = 0;
 
   struct cmd_opts opts = {0};
-  opts.r_dir[0] = "/usr";
-  opts.r_dir[1] = "/etc";
-  opts.n_r = 2;
-  opts.rw_dir[0] = "/tmp/x";
-  opts.n_rw = 1;
+  push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/usr");
+  push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/etc");
+  push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/tmp/x");
 
   assert(caged_setup(&opts) == CAGED_OK);
   assert(fake.create_calls_count == 1);
   assert(fake.add_calls_count == 3);
   assert(fake.restrict_calls_count == 1);
+
+  cmd_opts_free(&opts);
 }
 
 void test_setup_no_landlock(void) {
@@ -60,11 +60,12 @@ void test_setup_allow_ro_error(void) {
   fake.open_err = ENOENT;
 
   struct cmd_opts opts = {0};
-  opts.r_dir[0] = "/nope";
-  opts.n_r = 1;
+  push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/nope");
 
   assert(caged_setup(&opts) == CAGED_ERR_READ_ACCESS);
   assert(fake.restrict_calls_count == 0);
+
+  cmd_opts_free(&opts);
 }
 
 void test_setup_allow_rw_error(void) {
@@ -75,11 +76,12 @@ void test_setup_allow_rw_error(void) {
   fake.open_err = ENOENT;
 
   struct cmd_opts opts = {0};
-  opts.rw_dir[0] = "/nope";
-  opts.n_rw = 1;
+  push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/nope");
 
   assert(caged_setup(&opts) == CAGED_ERR_RW_ACCESS);
   assert(fake.restrict_calls_count == 0);
+
+  cmd_opts_free(&opts);
 }
 
 void test_setup_restrict_prctl_error(void) {
