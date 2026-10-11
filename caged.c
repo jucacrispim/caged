@@ -11,18 +11,14 @@
 #include <unistd.h>
 
 /*
-  Not defined by older kernel headers (added in Landlock ABI 9).
-  Kept as a fallback so caged compiles against headers predating it.
-*/
+  These LANDLOCK_* definitions are here because they are not
+  defined in my current system. So I define them here in order
+  to be able to write/compile code that supports these without
+  having them on my system.
+ */
 #ifndef LANDLOCK_ACCESS_FS_RESOLVE_UNIX
 #define LANDLOCK_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
 #endif
-
-/*
-  Restrict-self flags not defined by older kernel headers (added in Landlock
-  ABI 7 and 8). Kept as fallbacks so caged compiles against headers
-  predating them.
-*/
 #ifndef LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF
 #define LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF (1ULL << 0)
 #endif
@@ -68,7 +64,8 @@
 #define SCOPED (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL)
 
 /* net access handled by the latest api (added in Landlock ABI 4) */
-#define NET_HANDLED (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
+#define NET_HANDLED                                                            \
+  (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
 
 /* restrict-self flags supported by the latest api: the log flags were added
    in ABI 7 and TSYNC in ABI 8 */
@@ -285,6 +282,49 @@ static unsigned long get_supported_restrict_flags(long abi) {
   return flags;
 }
 
+/* A feature implemented by caged and the Landlock ABI that introduced it. */
+struct feature {
+  long min_abi;
+  const char *name;
+};
+
+static const struct feature FEATURES[] = {
+    {4, "network access control"},
+    {5, "ioctl on device files"},
+    {6, "IPC scopes"},
+    {7, "restrict-self log flags"},
+    {8, "restrict-self TSYNC"},
+    {9, "UNIX socket name resolution"},
+};
+
+/*
+  Warns on stderr about every feature the running kernel cannot support
+  because its Landlock ABI is older than the one that introduced it. This is
+  only a warning, not an error: caged still runs with the features that are
+  available.
+*/
+static void warn_unsupported_features(long abi) {
+  const char *disable = getenv("CAGED_DISABLE_WARNINGS");
+  if (disable != NULL && strcmp(disable, "1") == 0) {
+    return;
+  }
+  size_t n = sizeof FEATURES / sizeof FEATURES[0];
+  int warned = 0;
+  for (size_t k = 0; k < n; k++) {
+    if (FEATURES[k].min_abi > abi) {
+      if (!warned) {
+        fprintf(stderr,
+                "caged: warning: Landlock ABI %ld does not support some "
+                "features; they are unavailable:\n",
+                abi);
+        warned = 1;
+      }
+      fprintf(stderr, "caged: warning:   - %s (needs ABI %ld)\n",
+              FEATURES[k].name, FEATURES[k].min_abi);
+    }
+  }
+}
+
 /* Grant some kind of access for a given path */
 static int allow_access(int ruleset_fd, const char *path,
                         struct landlock_path_beneath_attr *pb) {
@@ -440,8 +480,8 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
       if (parse_port(argv[i + 1], &port) < 0) {
         return fatal("--allow-connect-port must be a port number (0..65535)");
       }
-      if (push_port(&opts->connect_ports, &opts->n_connect,
-                    &opts->cap_connect, port) < 0) {
+      if (push_port(&opts->connect_ports, &opts->n_connect, &opts->cap_connect,
+                    port) < 0) {
         return fatal("out of memory");
       }
       i += 2;
@@ -486,6 +526,7 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
   if (abi < 1) {
     return CAGED_ERR_NO_LANDLOCK;
   }
+  warn_unsupported_features(abi);
   int handled = get_handled_access_fs(abi);
   int handled_net = get_handled_access_net(abi);
   struct landlock_ruleset_attr r_perm = {
@@ -517,9 +558,8 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
       return CAGED_ERR_BIND_ACCESS;
     }
   }
-  if (restrict_self(ruleset,
-                    opts->restrict_flags & get_supported_restrict_flags(abi)) <
-      0) {
+  if (restrict_self(ruleset, opts->restrict_flags &
+                                 get_supported_restrict_flags(abi)) < 0) {
     return CAGED_ERR_RESTRICT_SELF;
   }
   return CAGED_OK;

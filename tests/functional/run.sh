@@ -370,6 +370,26 @@ test_restrict_flags_accepted() {
   check "restrict-self flags are accepted" 0 $?
 }
 
+# on an old kernel stderr carries the warnings; on a recent enough kernel
+# there is simply nothing to warn about (both are fine)
+test_warnings_printed_by_default() {
+  err=$($CAGED $RO -- true 2>&1 >/dev/null)
+  case "$err" in
+  "") ok "no ABI warnings on a recent kernel" ;;
+  *"caged: warning"*) ok "unsupported features are warned about by default" ;;
+  *) bad "unexpected warning output '$err'" ;;
+  esac
+}
+
+test_warnings_disabled_by_env() {
+  base=$($CAGED $RO -- true 2>&1 >/dev/null)
+  err=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO -- true 2>&1 >/dev/null)
+  check "CAGED_DISABLE_WARNINGS=1 silences the warnings" "" "$err"
+  if [ -n "$base" ]; then
+    ok "warnings were present by default and got suppressed"
+  fi
+}
+
 main() {
   test_read_file_allowed
   test_read_outside_denied
@@ -405,6 +425,9 @@ main() {
   test_net_bind_allowed_general
 
   test_restrict_flags_accepted
+
+  test_warnings_printed_by_default
+  test_warnings_disabled_by_env
 
   printf '\n%d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
