@@ -361,6 +361,15 @@ test_net_bind_allowed_general() {
   check "tcp bind allowed with --allow-bind-tcp" 0 "$rc"
 }
 
+# restrict-self flags ar for abi >= 7. On my system it is abi 6, so what I
+# test here is that the flags don't break the caged run. Warnings will show
+# the user what is not enabled due to kernel version.
+test_restrict_flags_accepted() {
+  $CAGED $RO --log-same-exec-off --log-new-exec-on --log-subdomains-off --tsync \
+    -- true 2>/dev/null
+  check "restrict-self flags are accepted" 0 $?
+}
+
 main() {
   test_read_file_allowed
   test_read_outside_denied
@@ -394,6 +403,8 @@ main() {
   test_net_bind_denied_by_default
   test_net_bind_allowed_by_port
   test_net_bind_allowed_general
+
+  test_restrict_flags_accepted
 
   printf '\n%d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

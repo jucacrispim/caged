@@ -65,6 +65,10 @@ long __wrap_syscall(long num, ...) {
     break;
   }
   case SYS_landlock_restrict_self: {
+    int fd = va_arg(ap, int);
+    unsigned long flags = va_arg(ap, unsigned long);
+    (void)fd;
+    fake.last_restrict_flags = flags;
     fake.restrict_calls_count++;
     ret = fake.restrict_self_ret;
     break;

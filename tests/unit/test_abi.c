@@ -82,6 +82,23 @@ void test_get_handled_access_net_abi_gte_4(void) {
   assert(get_handled_access_net(9) == NET_HANDLED);
 }
 
+void test_get_supported_restrict_flags_abi_lt_7(void) {
+  /* the log flags were added in ABI 7. */
+  assert(get_supported_restrict_flags(1) == 0);
+  assert(get_supported_restrict_flags(6) == 0);
+}
+
+void test_get_supported_restrict_flags_abi_7(void) {
+  /* ABI 7 has the log flags but not TSYNC (added in ABI 8). */
+  unsigned long log_flags = RESTRICT_FLAGS & ~LANDLOCK_RESTRICT_SELF_TSYNC;
+  assert(get_supported_restrict_flags(7) == log_flags);
+}
+
+void test_get_supported_restrict_flags_abi_gte_8(void) {
+  assert(get_supported_restrict_flags(8) == RESTRICT_FLAGS);
+  assert(get_supported_restrict_flags(9) == RESTRICT_FLAGS);
+}
+
 int main(void) {
   test_get_handled_access_fs_abi_1();
   test_get_handled_access_fs_abi_gte_2();
@@ -97,6 +114,9 @@ int main(void) {
   test_get_supported_scopes_abi_gte_6();
   test_get_handled_access_net_abi_lt_4();
   test_get_handled_access_net_abi_gte_4();
+  test_get_supported_restrict_flags_abi_lt_7();
+  test_get_supported_restrict_flags_abi_7();
+  test_get_supported_restrict_flags_abi_gte_8();
 
   printf("OK\n");
   return 0;

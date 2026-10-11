@@ -18,6 +18,24 @@
 #define LANDLOCK_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
 #endif
 
+/*
+  Restrict-self flags not defined by older kernel headers (added in Landlock
+  ABI 7 and 8). Kept as fallbacks so caged compiles against headers
+  predating them.
+*/
+#ifndef LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF
+#define LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF (1ULL << 0)
+#endif
+#ifndef LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON
+#define LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON (1ULL << 1)
+#endif
+#ifndef LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF
+#define LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF (1ULL << 2)
+#endif
+#ifndef LANDLOCK_RESTRICT_SELF_TSYNC
+#define LANDLOCK_RESTRICT_SELF_TSYNC (1ULL << 3)
+#endif
+
 /* fs access handled by the latest api */
 #define FS_HANDLED                                                             \
   (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE |                \
@@ -52,6 +70,13 @@
 /* net access handled by the latest api (added in Landlock ABI 4) */
 #define NET_HANDLED (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
 
+/* restrict-self flags supported by the latest api: the log flags were added
+   in ABI 7 and TSYNC in ABI 8 */
+#define RESTRICT_FLAGS                                                         \
+  (LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |                                  \
+   LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |                                    \
+   LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
+
 enum caged_return {
   CAGED_OK = 0,
   CAGED_ERR_NO_LANDLOCK,
@@ -72,6 +97,7 @@ struct cmd_opts {
   int cap_rw;
   unsigned long released_scopes;
   unsigned long released_net;
+  unsigned long restrict_flags;
   unsigned short *connect_ports;
   int n_connect;
   int cap_connect;
@@ -174,11 +200,11 @@ static int add_rule(int ruleset_fd,
 }
 
 /* Locks the current process and its children to the rules added up to point */
-static int restrict_self(int ruleset_fd) {
+static int restrict_self(int ruleset_fd, unsigned long flags) {
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
     return -1;
   }
-  return syscall(SYS_landlock_restrict_self, ruleset_fd, 0);
+  return syscall(SYS_landlock_restrict_self, ruleset_fd, flags);
 }
 
 static long check_abi() {
@@ -240,6 +266,23 @@ static int get_handled_access_net(long abi) {
     handled = 0;
   }
   return handled;
+}
+
+/*
+  Returns the restrict-self flags supported by the abi version available on
+  the host. The log flags were added in ABI 7 and TSYNC in ABI 8.
+*/
+static unsigned long get_supported_restrict_flags(long abi) {
+  unsigned long flags = RESTRICT_FLAGS;
+  if (abi < 7) {
+    flags &= ~(LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
+               LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
+               LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
+  }
+  if (abi < 8) {
+    flags &= ~LANDLOCK_RESTRICT_SELF_TSYNC;
+  }
+  return flags;
 }
 
 /* Grant some kind of access for a given path */
@@ -362,6 +405,18 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
     } else if (strcmp(argv[i], "--allow-scoped-abstract-unix") == 0) {
       opts->released_scopes |= LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET;
       i += 1;
+    } else if (strcmp(argv[i], "--log-same-exec-off") == 0) {
+      opts->restrict_flags |= LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF;
+      i += 1;
+    } else if (strcmp(argv[i], "--log-new-exec-on") == 0) {
+      opts->restrict_flags |= LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON;
+      i += 1;
+    } else if (strcmp(argv[i], "--log-subdomains-off") == 0) {
+      opts->restrict_flags |= LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF;
+      i += 1;
+    } else if (strcmp(argv[i], "--tsync") == 0) {
+      opts->restrict_flags |= LANDLOCK_RESTRICT_SELF_TSYNC;
+      i += 1;
     } else if (strcmp(argv[i], "--allow-connect-tcp") == 0) {
       if (opts->n_connect > 0) {
         return fatal("--allow-connect-tcp conflicts with --allow-connect-port");
@@ -462,7 +517,9 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
       return CAGED_ERR_BIND_ACCESS;
     }
   }
-  if (restrict_self(ruleset) < 0) {
+  if (restrict_self(ruleset,
+                    opts->restrict_flags & get_supported_restrict_flags(abi)) <
+      0) {
     return CAGED_ERR_RESTRICT_SELF;
   }
   return CAGED_OK;

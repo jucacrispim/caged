@@ -28,6 +28,8 @@ void test_setup_ok(void) {
   assert(fake.last_scoped == SCOPED);
   /* net is handled (and thus denied) by default */
   assert(fake.last_handled_net == NET_HANDLED);
+  /* no restrict-self flags are passed by default */
+  assert(fake.last_restrict_flags == 0);
 
   cmd_opts_free(&opts);
 }
@@ -140,6 +142,53 @@ void test_setup_scopes_unsupported_abi(void) {
 
   assert(caged_setup(&opts) == CAGED_OK);
   assert(fake.last_scoped == 0);
+}
+
+/* restrict-self flags requested by the user are passed through when
+   supported by the ABI */
+void test_setup_restrict_flags(void) {
+  reset_fake();
+  fake.abi = 8;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.restrict_flags = LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
+                        LANDLOCK_RESTRICT_SELF_TSYNC;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_restrict_flags ==
+         (LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
+          LANDLOCK_RESTRICT_SELF_TSYNC));
+}
+
+/* below ABI 7 the log flags are masked out (consistent with scopes) */
+void test_setup_restrict_flags_unsupported_abi(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.restrict_flags = RESTRICT_FLAGS;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_restrict_flags == 0);
+}
+
+/* ABI 7 supports the log flags but TSYNC is masked out */
+void test_setup_restrict_flags_abi_7(void) {
+  reset_fake();
+  fake.abi = 7;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.restrict_flags = RESTRICT_FLAGS;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.last_restrict_flags ==
+         (RESTRICT_FLAGS & ~LANDLOCK_RESTRICT_SELF_TSYNC));
 }
 
 void test_setup_no_landlock(void) {
@@ -255,6 +304,9 @@ int main(void) {
   test_setup_net_unsupported_abi();
   test_setup_released_scope();
   test_setup_scopes_unsupported_abi();
+  test_setup_restrict_flags();
+  test_setup_restrict_flags_unsupported_abi();
+  test_setup_restrict_flags_abi_7();
   test_setup_no_landlock();
   test_setup_create_ruleset_error();
   test_setup_allow_ro_error();

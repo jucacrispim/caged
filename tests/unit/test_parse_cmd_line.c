@@ -419,6 +419,42 @@ void test_bind_port_out_of_memory(void) {
   cmd_opts_free(&opts);
 }
 
+/* the restrict-self flags are boolean and accumulate */
+void test_restrict_flags(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",
+                  "--log-same-exec-off",
+                  "--log-new-exec-on",
+                  "--log-subdomains-off",
+                  "--tsync",
+                  "--",
+                  "true",
+                  NULL};
+
+  assert(parse_cmd_line(8, argv, &opts) == 0);
+  assert(opts.restrict_flags ==
+         (LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
+          LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
+          LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF |
+          LANDLOCK_RESTRICT_SELF_TSYNC));
+
+  cmd_opts_free(&opts);
+}
+
+/* a restrict flag mixes with path options, order preserved */
+void test_restrict_flags_with_ro(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--ro", "/usr", "--tsync", "--", "true", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(6, argv, &opts) == 0);
+  assert(opts.n_r == 1);
+  assert(strcmp(opts.r_dir[0], "/usr") == 0);
+  assert(opts.restrict_flags == LANDLOCK_RESTRICT_SELF_TSYNC);
+
+  cmd_opts_free(&opts);
+}
+
 int main(void) {
   test_ro_only_one_value();
   test_rw_only_one_value();
@@ -452,6 +488,8 @@ int main(void) {
   test_allow_bind_conflict_reverse();
   test_connect_port_out_of_memory();
   test_bind_port_out_of_memory();
+  test_restrict_flags();
+  test_restrict_flags_with_ro();
 
   printf("OK\n");
   return 0;
