@@ -158,8 +158,12 @@ test_empty_command_exits_2() {
 }
 
 test_no_arguments_exits_2() {
-  $CAGED 2>/dev/null
+  err=$($CAGED 2>&1 >/dev/null)
   check "no arguments exits 2" 2 $?
+  case "$err" in
+  *"usage: caged"*) ok "no arguments prints the help" ;;
+  *) bad "no arguments prints the help" ;;
+  esac
 }
 
 

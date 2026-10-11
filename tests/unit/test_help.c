@@ -16,7 +16,7 @@ static void capture_help(char *buf, size_t size) {
   assert(dup2(pipefd[1], STDOUT_FILENO) >= 0);
   close(pipefd[1]);
 
-  print_help();
+  print_help(stdout);
 
   fflush(stdout);
   assert(dup2(saved, STDOUT_FILENO) >= 0);
@@ -74,10 +74,45 @@ void test_parse_help_short(void) {
   cmd_opts_free(&opts);
 }
 
+/* Redirects stderr, runs parse_cmd_line with no arguments and copies the
+   captured text. */
+static void capture_no_args(char *buf, size_t size) {
+  int pipefd[2];
+  assert(pipe(pipefd) == 0);
+
+  fflush(stderr);
+  int saved = dup(STDERR_FILENO);
+  assert(saved >= 0);
+  assert(dup2(pipefd[1], STDERR_FILENO) >= 0);
+  close(pipefd[1]);
+
+  struct cmd_opts opts = {0};
+  assert(parse_cmd_line(1, (char *[]){"caged", NULL}, &opts) < 0);
+
+  fflush(stderr);
+  assert(dup2(saved, STDERR_FILENO) >= 0);
+  close(saved);
+
+  ssize_t n = read(pipefd[0], buf, size - 1);
+  if (n < 0) {
+    n = 0;
+  }
+  buf[n] = '\0';
+  close(pipefd[0]);
+}
+
+/* running with no arguments prints the usage on stderr and fails */
+void test_no_args_prints_help(void) {
+  char buf[4096];
+  capture_no_args(buf, sizeof buf);
+  assert(strstr(buf, "usage: caged") != NULL);
+}
+
 int main(void) {
   test_print_help();
   test_parse_help_long();
   test_parse_help_short();
+  test_no_args_prints_help();
 
   printf("OK\n");
   return 0;

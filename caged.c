@@ -420,9 +420,9 @@ static int fatal(const char *msg) {
   return -1;
 }
 
-/* Prints the command usage to stdout. */
-static void print_help(void) {
-  printf("usage: caged [OPTIONS] -- CMD [ARGS...]\n"
+/* Prints the command usage to the given stream. */
+static void print_help(FILE *out) {
+  fprintf(out, "usage: caged [OPTIONS] -- CMD [ARGS...]\n"
          "\n"
          "Run CMD in a Landlock sandbox. Filesystem, network and IPC access\n"
          "is denied by default; only what is explicitly allowed is "
@@ -457,6 +457,10 @@ static void print_help(void) {
 }
 
 static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
+  if (argc <= 1) {
+    print_help(stderr);
+    return -1;
+  }
   int i = 1;
   while (argc > i) {
     if (strcmp(argv[i], "--ro") == 0) {
@@ -615,7 +619,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (opts.help) {
-    print_help();
+    print_help(stdout);
     cmd_opts_free(&opts);
     return 0;
   }
