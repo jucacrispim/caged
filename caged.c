@@ -102,6 +102,7 @@ struct cmd_opts {
   int n_bind;
   int cap_bind;
   char **cmd;
+  int help;
 };
 
 /*
@@ -419,6 +420,42 @@ static int fatal(const char *msg) {
   return -1;
 }
 
+/* Prints the command usage to stdout. */
+static void print_help(void) {
+  printf("usage: caged [OPTIONS] -- CMD [ARGS...]\n"
+         "\n"
+         "Run CMD in a Landlock sandbox. Filesystem, network and IPC access\n"
+         "is denied by default; only what is explicitly allowed is "
+         "reachable.\n"
+         "\n"
+         "Options:\n"
+         "  --ro PATH                      allow reading PATH (file or "
+         "directory)\n"
+         "  --rw PATH                      allow reading and writing PATH\n"
+         "  --allow-connect-port PORT      allow TCP connect to PORT (0 = "
+         "ephemeral)\n"
+         "  --allow-bind-port PORT         allow TCP bind to PORT (0 = "
+         "ephemeral)\n"
+         "  --allow-connect-tcp            allow TCP connect to any port\n"
+         "  --allow-bind-tcp               allow TCP bind to any port\n"
+         "  --allow-scoped-signal          allow signalling outside the "
+         "sandbox\n"
+         "  --allow-scoped-abstract-unix   allow abstract unix socket "
+         "connects\n"
+         "  --log-same-exec-off            no audit log before execve (ABI >= "
+         "7)\n"
+         "  --log-new-exec-on              audit log after execve (ABI >= 7)\n"
+         "  --log-subdomains-off           no audit log for subdomains (ABI >= "
+         "7)\n"
+         "  --tsync                        apply the sandbox to all threads "
+         "(ABI >= 8)\n"
+         "  -h, --help                     show this help and exit\n"
+         "\n"
+         "Environment:\n"
+         "  CAGED_DISABLE_WARNINGS=1       silence kernel ABI compatibility "
+         "warnings\n");
+}
+
 static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
   int i = 1;
   while (argc > i) {
@@ -501,6 +538,9 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
         return fatal("out of memory");
       }
       i += 2;
+    } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+      opts->help = 1;
+      return 0;
     } else if (strcmp(argv[i], "--") == 0) {
       if (i + 1 >= argc) {
         return fatal("missing command after --");
@@ -509,7 +549,7 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
       opts->cmd = &argv[i];
       return 0;
     } else {
-      return fatal("unknown option");
+      return fatal("unknown option (use --help)");
     }
   }
   return fatal("missing command (use -- cmd)");
@@ -572,6 +612,12 @@ int main(int argc, char *argv[]) {
   if (parse_cmd_line(argc, argv, &opts) < 0) {
     cmd_opts_free(&opts);
     return 2;
+  }
+
+  if (opts.help) {
+    print_help();
+    cmd_opts_free(&opts);
+    return 0;
   }
 
   enum caged_return r = caged_setup(&opts);

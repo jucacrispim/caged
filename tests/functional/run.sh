@@ -390,6 +390,24 @@ test_warnings_disabled_by_env() {
   fi
 }
 
+test_help_long() {
+  out=$($CAGED --help 2>/dev/null)
+  check "--help exits 0" 0 $?
+  case "$out" in
+  "usage: caged"*) ok "--help prints the usage line" ;;
+  *) bad "--help prints the usage line" ;;
+  esac
+}
+
+test_help_short() {
+  out=$($CAGED -h 2>/dev/null)
+  check "-h exits 0" 0 $?
+  case "$out" in
+  "usage: caged"*) ok "-h prints the usage line" ;;
+  *) bad "-h prints the usage line" ;;
+  esac
+}
+
 main() {
   test_read_file_allowed
   test_read_outside_denied
@@ -428,6 +446,9 @@ main() {
 
   test_warnings_printed_by_default
   test_warnings_disabled_by_env
+
+  test_help_long
+  test_help_short
 
   printf '\n%d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

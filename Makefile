@@ -17,12 +17,13 @@ $(BUILD_DIR)/caged: caged.c
 	mkdir -p $(@D)
 	$(CC) $(CFLAGS) -o $@ $<
 
-unit: $(BUILD_DIR)/test_abi $(BUILD_DIR)/test_allow_access $(BUILD_DIR)/test_parse_cmd_line $(BUILD_DIR)/test_setup $(BUILD_DIR)/test_net
+unit: $(BUILD_DIR)/test_abi $(BUILD_DIR)/test_allow_access $(BUILD_DIR)/test_parse_cmd_line $(BUILD_DIR)/test_setup $(BUILD_DIR)/test_net $(BUILD_DIR)/test_help
 	$(BUILD_DIR)/test_abi
 	$(BUILD_DIR)/test_allow_access
 	$(BUILD_DIR)/test_parse_cmd_line
 	$(BUILD_DIR)/test_setup
 	$(BUILD_DIR)/test_net
+	$(BUILD_DIR)/test_help
 
 $(BUILD_DIR)/test_abi: $(UNIT)/test_abi.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
 	mkdir -p $(@D)
@@ -44,6 +45,10 @@ $(BUILD_DIR)/test_net: $(UNIT)/test_net.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_s
 	mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) $(WRAP) -o $@ $(UNIT)/test_net.c $(UNIT)/fake_syscalls.c
 
+$(BUILD_DIR)/test_help: $(UNIT)/test_help.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
+	mkdir -p $(@D)
+	$(CC) $(TEST_CFLAGS) $(WRAP) -o $@ $(UNIT)/test_help.c $(UNIT)/fake_syscalls.c
+
 test: unit functional
 
 functional: build
@@ -51,12 +56,13 @@ functional: build
 
 check: unit coverage functional
 
-coverage: $(COV_DIR)/test_abi $(COV_DIR)/test_allow_access $(COV_DIR)/test_parse_cmd_line $(COV_DIR)/test_setup $(COV_DIR)/test_net
+coverage: $(COV_DIR)/test_abi $(COV_DIR)/test_allow_access $(COV_DIR)/test_parse_cmd_line $(COV_DIR)/test_setup $(COV_DIR)/test_net $(COV_DIR)/test_help
 	$(COV_DIR)/test_abi
 	$(COV_DIR)/test_allow_access
 	$(COV_DIR)/test_parse_cmd_line
 	$(COV_DIR)/test_setup
 	$(COV_DIR)/test_net
+	$(COV_DIR)/test_help
 	mkdir -p $(COV_DIR)/report
 	gcovr --root . --filter 'caged\.c$$' \
 	      --txt --txt-summary \
@@ -87,6 +93,10 @@ $(COV_DIR)/test_setup: $(UNIT)/test_setup.c $(UNIT)/fake_syscalls.c $(UNIT)/fake
 $(COV_DIR)/test_net: $(UNIT)/test_net.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
 	mkdir -p $(@D)
 	$(CC) $(COV_CFLAGS) $(WRAP) -o $@ $(UNIT)/test_net.c $(UNIT)/fake_syscalls.c
+
+$(COV_DIR)/test_help: $(UNIT)/test_help.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
+	mkdir -p $(@D)
+	$(CC) $(COV_CFLAGS) $(WRAP) -o $@ $(UNIT)/test_help.c $(UNIT)/fake_syscalls.c
 
 clean:
 	rm -rf $(BUILD_DIR)
