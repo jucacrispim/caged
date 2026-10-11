@@ -6,8 +6,10 @@ BUILD_DIR   := build
 UNIT        := tests/unit
 COV_DIR    := $(BUILD_DIR)/cov
 COV_CFLAGS := $(TEST_CFLAGS) --coverage -fcondition-coverage
+DOCS_DIR   := docs
+DOCS_VENV  := $(HOME)/.virtualenvs/caged-docs
 
-.PHONY: all build unit test functional check coverage clean
+.PHONY: all build unit test functional check coverage clean docs docs-env
 
 all: build
 
@@ -97,6 +99,13 @@ $(COV_DIR)/test_net: $(UNIT)/test_net.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_sys
 $(COV_DIR)/test_help: $(UNIT)/test_help.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
 	mkdir -p $(@D)
 	$(CC) $(COV_CFLAGS) $(WRAP) -o $@ $(UNIT)/test_help.c $(UNIT)/fake_syscalls.c
+
+docs:
+	$(MAKE) -C $(DOCS_DIR) html
+
+docs-env:
+	python3 -m venv $(DOCS_VENV)
+	$(DOCS_VENV)/bin/pip install -r $(DOCS_DIR)/requirements.txt
 
 clean:
 	rm -rf $(BUILD_DIR)
