@@ -1,0 +1,53 @@
+
+builders:
+
+  - name: Build & Test
+
+    plugins:
+      - name: apt-install
+        packages:
+          - gcc
+          - make
+          - linux-libc-dev
+          - python3
+
+    steps:
+      - name: Build
+        command: make build
+
+      - name: Unit test
+        command: make unit
+
+      - name: Coverage
+        command: make coverage
+
+      - name: Functional tests
+        command: make functional
+
+  - name: Docs
+    branches:
+      - master
+
+    platform: python3.13
+
+    triggered_by:
+      - builder_name: Build & Test
+        statuses:
+          - success
+
+    plugins:
+      - name: apt-install
+        packages:
+          - curl
+          - make
+
+    steps:
+
+      - name: Setup env
+        command: make docs-env
+
+      - name: Build docs
+        command: make docs
+
+      - name: upload docs
+        command: ./scripts/upload_docs.sh
