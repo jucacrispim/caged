@@ -10,6 +10,7 @@ builders:
           - make
           - linux-libc-dev
           - python3
+          - gcovr
 
     steps:
       - name: Build
