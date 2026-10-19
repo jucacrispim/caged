@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -144,6 +145,8 @@ enum caged_return {
   CAGED_ERR_CONNECT_ACCESS,
   CAGED_ERR_BIND_ACCESS,
   CAGED_ERR_RESTRICT_SELF,
+  CAGED_ERR_RLIMIT,
+  CAGED_ERR_CLOSE_FDS,
   CAGED_ERR_SECCOMP_INIT,
   CAGED_ERR_SECCOMP_FAMILIES,
   CAGED_ERR_SECCOMP_INET_RAW,
@@ -173,6 +176,7 @@ struct cmd_opts {
   int allow_unix_sockets;
   int allow_network_sockets;
   int allow_sysv_ipc;
+  long max_procs;
   char **cmd;
   int help;
 };
@@ -223,6 +227,30 @@ static int restrict_self(int ruleset_fd, unsigned long flags) {
   }
   return syscall(SYS_landlock_restrict_self, ruleset_fd, flags);
 }
+
+/* Sets soft and the hard limits. */
+static int set_limit(int resource, rlim_t value) {
+  struct rlimit rl = {.rlim_cur = value, .rlim_max = value};
+  return setrlimit(resource, &rl);
+}
+
+/*
+  Applies the resource limits. Core is always 0.
+*/
+static int apply_rlimits(long max_procs) {
+  if (set_limit(RLIMIT_CORE, 0) < 0) {
+    return -1;
+  }
+  if (max_procs > 0 && set_limit(RLIMIT_NPROC, (rlim_t)max_procs) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+/*
+  Closes every file descriptor inherited above stderr.
+*/
+static int close_inherited_fds(void) { return close_range(3, ~0U, 0); }
 
 static long check_abi() {
   return syscall(SYS_landlock_create_ruleset, NULL, 0,
@@ -553,6 +581,10 @@ static const char *caged_strreturn(enum caged_return r) {
     return "error allowing bind access";
   case CAGED_ERR_RESTRICT_SELF:
     return "error restricting self";
+  case CAGED_ERR_RLIMIT:
+    return "error setting resource limits";
+  case CAGED_ERR_CLOSE_FDS:
+    return "error closing inherited file descriptors";
   case CAGED_ERR_SECCOMP_INIT:
     return "error creating seccomp filter";
   case CAGED_ERR_SECCOMP_FAMILIES:
@@ -619,6 +651,8 @@ static void print_help(FILE *out) {
       "  --allow-unix-sockets           allow AF_UNIX sockets (IPC)\n"
       "  --allow-network-sockets        allow AF_INET, AF_INET6, AF_NETLINK\n"
       "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"
+      "  --max-procs N                  set RLIMIT_NPROC to N (default: no "
+      "limit)\n"
       "  -h, --help                     show this help and exit\n"
       "\n"
       "Environment:\n"
@@ -685,6 +719,21 @@ static int parse_port(const char *s, unsigned short *out) {
     return -1;
   }
   *out = (unsigned short)v;
+  return 0;
+}
+
+/*
+  Parses a positive decimal into `out`. Returns 0 on success, -1 when the
+  string is not a positive integer.
+*/
+static int parse_positive(const char *s, long *out) {
+  char *end;
+  errno = 0;
+  long v = strtol(s, &end, 10);
+  if (end == s || *end != '\0' || errno != 0 || v <= 0) {
+    return -1;
+  }
+  *out = v;
   return 0;
 }
 
@@ -758,6 +807,14 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
     } else if (strcmp(argv[i], "--allow-sysv-ipc") == 0) {
       opts->allow_sysv_ipc = 1;
       i += 1;
+    } else if (strcmp(argv[i], "--max-procs") == 0) {
+      if (i + 1 >= argc) {
+        return fatal("--max-procs must have a value");
+      }
+      if (parse_positive(argv[i + 1], &opts->max_procs) < 0) {
+        return fatal("--max-procs must be a positive number");
+      }
+      i += 2;
     } else if (strcmp(argv[i], "--allow-connect-tcp") == 0) {
       if (opts->n_connect > 0) {
         return fatal("--allow-connect-tcp conflicts with --allow-connect-port");
@@ -826,6 +883,9 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
   Use caged_strreturn for a sane message.
 */
 static enum caged_return caged_setup(const struct cmd_opts *opts) {
+  if (apply_rlimits(opts->max_procs) < 0) {
+    return CAGED_ERR_RLIMIT;
+  }
   long abi = check_abi();
   if (abi < 1) {
     return CAGED_ERR_NO_LANDLOCK;
@@ -867,8 +927,16 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
     return CAGED_ERR_RESTRICT_SELF;
   }
   close(ruleset);
-  return apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets,
-                       opts->allow_sysv_ipc);
+  enum caged_return r =
+      apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets,
+                    opts->allow_sysv_ipc);
+  if (r != CAGED_OK) {
+    return r;
+  }
+  if (close_inherited_fds() < 0) {
+    return CAGED_ERR_CLOSE_FDS;
+  }
+  return CAGED_OK;
 }
 
 /* GCOV_EXCL_START */

@@ -26,6 +26,9 @@ caged [OPTIONS] -- CMD [ARGS...]
   `--allow-scoped-abstract-unix`.
 - **System V IPC**: denied by default (shared memory, message queues and
   semaphores fail with `ENOSYS`); release it with `--allow-sysv-ipc`.
+- **Limits and descriptors**: core dumps are disabled and inherited file
+  descriptors above stderr are closed before the command runs; `--max-procs
+  N` caps `RLIMIT_NPROC`.
 - **Socket families**: every family except `AF_INET`, `AF_INET6` and
   `AF_NETLINK` is denied, including `AF_UNIX`; release them with
   `--allow-network-sockets` / `--allow-unix-sockets`. Raw sockets

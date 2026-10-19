@@ -384,6 +384,26 @@ test_sysv_ipc_allowed_with_flag() {
   fi
 }
 
+# a descriptor inherited from outside the sandbox is closed before exec
+test_inherited_fd_is_closed() {
+  $CAGED $RO 9</dev/null -- sh -c 'cat <&9' >/dev/null 2>&1
+  check_ne "inherited fd is closed" 0 $?
+}
+
+# core dumps would write process memory wherever the confined process points
+# its cwd
+test_core_dump_disabled() {
+  out=$($CAGED $RO -- sh -c 'ulimit -c' 2>/dev/null)
+  check "core dump disabled" 0 "$out"
+}
+
+# --max-procs is passed through as RLIMIT_NPROC (dash has no `ulimit -u`)
+test_max_procs_set() {
+  out=$($CAGED $RO_PY --max-procs 32 -- python3 -c \
+        'import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])' 2>/dev/null)
+  check "--max-procs is applied" 32 "$out"
+}
+
 # restrict-self flags ar for abi >= 7. On my system it is abi 6, so what I
 # test here is that the flags don't break the caged run. Warnings will show
 # the user what is not enabled due to kernel version.
@@ -467,6 +487,10 @@ main() {
 
   test_sysv_ipc_denied
   test_sysv_ipc_allowed_with_flag
+
+  test_inherited_fd_is_closed
+  test_core_dump_disabled
+  test_max_procs_set
 
   test_restrict_flags_accepted
 

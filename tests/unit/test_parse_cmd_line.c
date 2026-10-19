@@ -462,6 +462,79 @@ void test_allow_network_sockets(void) {
   cmd_opts_free(&opts);
 }
 
+/* --max-procs sets the process limit */
+void test_max_procs(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", "64", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(opts.max_procs == 64);
+
+  cmd_opts_free(&opts);
+}
+
+/* --max-procs without a value is a usage error */
+void test_max_procs_missing_value(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* a non-numeric value is a usage error */
+void test_max_procs_invalid(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", "abc", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.max_procs == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* zero is not a process limit */
+void test_max_procs_zero(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", "0", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* negative values are not a process limit */
+void test_max_procs_negative(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", "-1", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* trailing garbage after the digits is a usage error */
+void test_max_procs_trailing_garbage(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", "12abc", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* a value that overflows a long is a usage error */
+void test_max_procs_overflow(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--max-procs", "99999999999999999999", "--", "true",
+                  NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
 /* --allow-sysv-ipc releases the SysV IPC ban */
 void test_allow_sysv_ipc(void) {
   struct cmd_opts opts = {0};
@@ -568,6 +641,13 @@ int main(void) {
   test_allow_network_sockets();
   test_allow_sysv_ipc();
   test_allow_sockets_combined();
+  test_max_procs();
+  test_max_procs_missing_value();
+  test_max_procs_invalid();
+  test_max_procs_zero();
+  test_max_procs_negative();
+  test_max_procs_trailing_garbage();
+  test_max_procs_overflow();
 
   printf("OK\n");
   return 0;

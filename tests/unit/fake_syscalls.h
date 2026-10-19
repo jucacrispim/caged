@@ -48,6 +48,14 @@ struct fake_context {
   int fail_realloc;
   int realloc_err;
 
+  int setrlimit_ret;
+  int setrlimit_err;
+  /* Fail only the Nth setrlimit() call. 0 fails on the first one
+     when setrlimit_ret is negative. Used to reach the RLIMIT_NPROC call. */
+  int setrlimit_fail_at;
+  int close_range_ret;
+  int close_range_err;
+
   int seccomp_init_null;
   int seccomp_rule_ret;
   /* Fail only the Nth rule call). 0 makes every call fail when
@@ -81,6 +89,18 @@ struct fake_context {
   uint32_t last_seccomp_action;
   unsigned int last_seccomp_arg_cnt;
   int seccomp_resolve_calls_count;
+
+  /* resource and fd spies */
+  int setrlimit_calls_count;
+  int last_rlimit_resource;
+  unsigned long last_rlimit_cur;
+  unsigned long last_rlimit_max;
+  int close_range_calls_count;
+  unsigned int last_close_range_first;
+  unsigned int last_close_range_last;
+  int last_close_range_flags;
+  /* seccomp_load() count at the moment close_range() ran */
+  int close_range_seen_loads;
 };
 
 extern struct fake_context fake;

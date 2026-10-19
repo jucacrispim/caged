@@ -70,6 +70,7 @@ void test_print_help(void) {
   assert(strstr(buf, "--allow-unix-sockets") != NULL);
   assert(strstr(buf, "--allow-network-sockets") != NULL);
   assert(strstr(buf, "--allow-sysv-ipc") != NULL);
+  assert(strstr(buf, "--max-procs N") != NULL);
   assert(strstr(buf, "--help") != NULL);
   assert(strstr(buf, "CAGED_DISABLE_WARNINGS") != NULL);
 }

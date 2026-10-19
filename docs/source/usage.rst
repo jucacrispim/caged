@@ -164,6 +164,31 @@ Thread sync
     one. Added in ABI 8; required for correctness if the process is
     multi-threaded.
 
+File descriptors and resource limits
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Before running the command, caged closes every inherited file descriptor above
+stderr (``close_range(3, ~0U, 0)``). Landlock and seccomp only govern what is
+opened *inside* the domain, so a descriptor handed to caged would otherwise
+stay usable no matter what the policy says — a socket already connected to a
+service outside the sandbox, for example.
+
+.. warning::
+
+   caged keeps only ``stdin``, ``stdout`` and ``stderr``. Anything else must be
+   passed through a pipe or a file.
+
+Core dumps are always disabled (``RLIMIT_CORE = 0``): a core writes process
+memory, secrets included, to a path the confined process picks through its
+working directory. The soft **and** the hard limit are set, so the command
+cannot raise them back.
+
+``--max-procs N``
+    Set ``RLIMIT_NPROC`` to ``N``, soft and hard. Without it the limit is left
+    as inherited. Note that ``RLIMIT_NPROC`` is counted per **real uid** over
+    the whole system, not per process tree, so ``N`` has to be larger than the
+    number of processes the user already has.
+
 Misc
 ~~~~
 
@@ -183,8 +208,8 @@ Exit status
 - **0** — the command ran (``caged`` replaces itself with the command, so the
   exit status is the command's).
 - **1** — setup failed (Landlock unavailable, ruleset error, a path could not
-  be opened, the seccomp filter could not be installed) or the command could
-  not be executed.
+  be opened, a limit could not be set, the seccomp filter could not be
+  installed) or the command could not be executed.
 - **2** — usage error (unknown option, missing value, conflicting options,
   missing ``-- cmd``, or run with no arguments, which prints the help on
   stderr).

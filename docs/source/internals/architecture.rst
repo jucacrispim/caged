@@ -22,20 +22,25 @@ before restricting itself once.
 
 The setup is a one-way funnel:
 
-1. **Probe the ABI** with ``check_abi()`` (``landlock_create_ruleset`` with
+1. **Apply the resource limits** (``apply_rlimits``): ``RLIMIT_CORE = 0``
+   always, plus ``RLIMIT_NPROC`` when ``--max-procs`` was given. First, so the
+   setup itself runs with them.
+2. **Probe the ABI** with ``check_abi()`` (``landlock_create_ruleset`` with
    ``attr == NULL`` and the version flag).
-2. **Compute the handled masks** for this ABI (``get_handled_access_fs``,
+3. **Compute the handled masks** for this ABI (``get_handled_access_fs``,
    ``get_handled_access_net``, ``get_supported_scopes``) and fill
    ``struct landlock_ruleset_attr``.
-3. **Create the ruleset** (``create_ruleset``).
-4. **Add rules** — one ``PATH_BENEATH`` rule per path, one ``NET_PORT`` rule
+4. **Create the ruleset** (``create_ruleset``).
+5. **Add rules** — one ``PATH_BENEATH`` rule per path, one ``NET_PORT`` rule
    per port.
-5. **Restrict self** (``restrict_self``): ``PR_SET_NO_NEW_PRIVS`` followed by
+6. **Restrict self** (``restrict_self``): ``PR_SET_NO_NEW_PRIVS`` followed by
    ``landlock_restrict_self`` with the requested flags.
-6. **Install the seccomp filter** (``apply_seccomp``): last, so it does not
-   have to pre-declare the syscalls the setup itself makes, and so the
-   ``no_new_privs`` flag set in step 5 is already there (it is what lets an
-   unprivileged ``seccomp_load`` succeed).
+7. **Install the seccomp filter** (``apply_seccomp``): last among the policy
+   layers, so it does not have to model the syscalls the setup itself makes
+   (``open``, ``fstat``, ``close``, ``prctl``, ``landlock_*``).
+8. **Close the inherited descriptors** (``close_inherited_fds``):
+   ``close_range(3, ~0U, 0)``. Truly last, after every step that could still
+   need to report an error — ``stderr`` is fd 2 and stays open.
 
 The three Landlock syscalls have no glibc wrapper, so they are issued raw with
 ``syscall()``: ``SYS_landlock_create_ruleset``, ``SYS_landlock_add_rule`` and
@@ -100,6 +105,8 @@ to whatever it wants:
      CAGED_ERR_CONNECT_ACCESS,
      CAGED_ERR_BIND_ACCESS,
      CAGED_ERR_RESTRICT_SELF,
+     CAGED_ERR_RLIMIT,
+     CAGED_ERR_CLOSE_FDS,
      CAGED_ERR_SECCOMP_INIT,
      CAGED_ERR_SECCOMP_FAMILIES,
      CAGED_ERR_SECCOMP_INET_RAW,
@@ -134,6 +141,7 @@ so there is no fixed upper bound:
      int allow_unix_sockets;
      int allow_network_sockets;
      int allow_sysv_ipc;
+     long max_procs;
      char **cmd;
      int help;
    };
@@ -162,6 +170,23 @@ Network rules
 
 ``add_net_rule`` issues a ``NET_PORT`` rule with the given access and port.
 ``allow_net_connect_access`` and ``allow_net_bind_access`` are thin wrappers.
+
+Limits and inherited descriptors
+--------------------------------
+
+``set_limit`` sets **both** the soft and the hard limit: a soft limit alone is
+no barrier, because the confined process may raise it back up to the hard one.
+``apply_rlimits`` then applies ``RLIMIT_CORE = 0`` unconditionally (a core
+dump writes process memory, secrets included, to a path the confined process
+chooses through its cwd) and ``RLIMIT_NPROC`` only when ``--max-procs`` was
+given — it is counted per real uid over the whole system, so a fixed default
+would make the first fork fail on a busy host.
+
+``close_inherited_fds`` is the other half of the socket filter. seccomp cannot
+revoke a descriptor, and Landlock cannot either, so a socket handed to caged
+already connected to a service outside the sandbox would bypass both layers.
+``close_range(3, ~0U, 0)`` removes it. Keeping fds 0–2 means ``die`` can still
+write to stderr after the fact.
 
 The seccomp layer
 -----------------

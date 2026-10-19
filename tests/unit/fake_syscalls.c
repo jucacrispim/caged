@@ -28,6 +28,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -175,6 +176,37 @@ int __wrap_prctl(int option, ...) {
     errno = fake.prctl_err;
   }
   return fake.prctl_ret;
+}
+
+int __wrap_setrlimit(int resource, const struct rlimit *rlim) {
+  fake.setrlimit_calls_count++;
+  fake.last_rlimit_resource = resource;
+  fake.last_rlimit_cur = rlim ? (unsigned long)rlim->rlim_cur : 0;
+  fake.last_rlimit_max = rlim ? (unsigned long)rlim->rlim_max : 0;
+
+  if (fake.setrlimit_ret >= 0) {
+    return fake.setrlimit_ret;
+  }
+  if (fake.setrlimit_fail_at != 0 &&
+      fake.setrlimit_calls_count != fake.setrlimit_fail_at) {
+    return 0;
+  }
+  errno = fake.setrlimit_err;
+  return fake.setrlimit_ret;
+}
+
+/* Never delegates to the real one: it would close every descriptor of the
+   test process, including the ones libgcov writes through. */
+int __wrap_close_range(unsigned int first, unsigned int last, int flags) {
+  fake.close_range_calls_count++;
+  fake.last_close_range_first = first;
+  fake.last_close_range_last = last;
+  fake.last_close_range_flags = flags;
+  fake.close_range_seen_loads = fake.seccomp_load_calls_count;
+  if (fake.close_range_ret < 0) {
+    errno = fake.close_range_err;
+  }
+  return fake.close_range_ret;
 }
 
 /*

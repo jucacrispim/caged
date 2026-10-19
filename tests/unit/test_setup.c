@@ -325,6 +325,80 @@ static void fail_seccomp_rule_at(int n) {
   fake.seccomp_rule_fail_at = n;
 }
 
+/* Cores are disabled even when nothing is asked for, and RLIMIT_NPROC is
+   left alone. Every inherited fd above stderr is closed at the end. */
+void test_setup_rlimits_default(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.setrlimit_calls_count == 1);
+  assert(fake.last_rlimit_resource == RLIMIT_CORE);
+  assert(fake.last_rlimit_cur == 0);
+  assert(fake.last_rlimit_max == 0);
+  assert(fake.close_range_calls_count == 1);
+  assert(fake.last_close_range_first == 3);
+  assert(fake.last_close_range_last == ~0U);
+  assert(fake.last_close_range_flags == 0);
+  /* fds are closed only after the seccomp filter is installed */
+  assert(fake.close_range_seen_loads == 1);
+}
+
+/* --max-procs sets RLIMIT_NPROC, with the hard limit equal to the soft one */
+void test_setup_max_procs(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.max_procs = 64;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.setrlimit_calls_count == 2);
+  assert(fake.last_rlimit_resource == RLIMIT_NPROC);
+  assert(fake.last_rlimit_cur == 64);
+  assert(fake.last_rlimit_max == 64);
+}
+
+/* a failing RLIMIT_CORE aborts the setup before any ruleset exists */
+void test_setup_rlimit_core_error(void) {
+  setup_reaches_seccomp();
+  fake.setrlimit_ret = -1;
+  fake.setrlimit_err = EPERM;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_RLIMIT);
+  assert(fake.create_calls_count == 0);
+  assert(fake.close_range_calls_count == 0);
+}
+
+/* the RLIMIT_CORE call succeeds and RLIMIT_NPROC is the one that fails */
+void test_setup_rlimit_nproc_error(void) {
+  setup_reaches_seccomp();
+  fake.setrlimit_ret = -1;
+  fake.setrlimit_err = EPERM;
+  fake.setrlimit_fail_at = 2;
+
+  struct cmd_opts opts = {0};
+  opts.max_procs = 64;
+
+  assert(caged_setup(&opts) == CAGED_ERR_RLIMIT);
+  assert(fake.setrlimit_calls_count == 2);
+  assert(fake.create_calls_count == 0);
+}
+
+/* failing to close the inherited fds is an error, after the filter loaded */
+void test_setup_close_fds_error(void) {
+  setup_reaches_seccomp();
+  fake.close_range_ret = -1;
+  fake.close_range_err = EINVAL;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_CLOSE_FDS);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
 /* By default the filter denies unix and network sockets: all rules run and
    the filter is loaded exactly once. */
 void test_setup_seccomp_defaults(void) {
@@ -563,6 +637,8 @@ void test_strreturn(void) {
       CAGED_ERR_CONNECT_ACCESS,
       CAGED_ERR_BIND_ACCESS,
       CAGED_ERR_RESTRICT_SELF,
+      CAGED_ERR_RLIMIT,
+      CAGED_ERR_CLOSE_FDS,
       CAGED_ERR_SECCOMP_INIT,
       CAGED_ERR_SECCOMP_FAMILIES,
       CAGED_ERR_SECCOMP_INET_RAW,
@@ -693,6 +769,11 @@ int main(void) {
   test_setup_allow_rw_error();
   test_setup_restrict_prctl_error();
   test_setup_restrict_syscall_error();
+  test_setup_rlimits_default();
+  test_setup_max_procs();
+  test_setup_rlimit_core_error();
+  test_setup_rlimit_nproc_error();
+  test_setup_close_fds_error();
   test_setup_seccomp_defaults();
   test_setup_seccomp_allow_unix();
   test_setup_seccomp_allow_network();
