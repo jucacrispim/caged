@@ -1,9 +1,8 @@
 CC          := gcc
-PKG_CONFIG  := pkg-config
-SECCOMP_CFLAGS := $(shell $(PKG_CONFIG) --cflags libseccomp 2>/dev/null)
-SECCOMP_LIBS   := $(shell $(PKG_CONFIG) --libs libseccomp 2>/dev/null)
-CFLAGS      := -Wall -Wextra -g $(SECCOMP_CFLAGS)
-LDLIBS      := $(SECCOMP_LIBS)
+CFLAGS      := -Wall -Wextra -g
+# libseccomp ships no headers outside the default include path, so there is
+# nothing for pkg-config to discover beyond the library name itself.
+LDLIBS      := -lseccomp
 TEST_CFLAGS := $(CFLAGS) -O0 -U_FORTIFY_SOURCE -fno-builtin
 WRAP        := -Wl,--wrap=syscall -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=close -Wl,--wrap=prctl -Wl,--wrap=realloc
 SECCOMP_WRAP := -Wl,--wrap=seccomp_init -Wl,--wrap=seccomp_rule_add_exact \
@@ -20,15 +19,18 @@ UNIT_TESTS  := test_abi test_allow_access test_parse_cmd_line test_setup test_ne
 UNIT_BINS   := $(addprefix $(BUILD_DIR)/,$(UNIT_TESTS))
 COV_BINS    := $(addprefix $(COV_DIR)/,$(UNIT_TESTS))
 
-.PHONY: all build unit test functional check coverage clean docs docs-env seccomp-pc
+.PHONY: all build unit test functional check coverage clean docs docs-env seccomp-dep
 
 all: build
 
-build: seccomp-pc $(BUILD_DIR)/caged
+build: seccomp-dep $(BUILD_DIR)/caged
 
-seccomp-pc:
-	@$(PKG_CONFIG) --exists libseccomp || \
-	  { echo "libseccomp not found: sudo apt install libseccomp-dev" >&2; exit 1; }
+# Fails early with an actionable message instead of a linker error.  Checks
+# what actually matters: that the compiler can see <seccomp.h>.
+seccomp-dep:
+	@printf '#include <seccomp.h>\nint main(void){return 0;}\n' | \
+	  $(CC) -x c -fsyntax-only - 2>/dev/null || \
+	  { echo "libseccomp headers not found: sudo apt install libseccomp-dev" >&2; exit 1; }
 
 $(BUILD_DIR)/caged: caged.c
 	mkdir -p $(@D)
@@ -52,7 +54,7 @@ test: unit functional
 functional: build
 	CAGED=$(BUILD_DIR)/caged sh tests/functional/run.sh
 
-check: seccomp-pc unit coverage functional
+check: seccomp-dep unit coverage functional
 
 coverage: $(COV_BINS)
 	@set -e; for t in $(COV_BINS); do $$t; done
