@@ -438,6 +438,48 @@ void test_bind_port_out_of_memory(void) {
   cmd_opts_free(&opts);
 }
 
+/* --allow-unix-sockets releases the AF_UNIX ban */
+void test_allow_unix_sockets(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-unix-sockets", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.allow_unix_sockets == 1);
+  assert(opts.allow_network_sockets == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* --allow-network-sockets releases AF_INET, AF_INET6 and AF_NETLINK */
+void test_allow_network_sockets(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-network-sockets", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.allow_unix_sockets == 0);
+  assert(opts.allow_network_sockets == 1);
+
+  cmd_opts_free(&opts);
+}
+
+/* both socket flags combine with the path options, order preserved */
+void test_allow_sockets_combined(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged",     "--allow-unix-sockets", "--ro",
+                  "/usr",      "--allow-network-sockets", "--allow-connect-port",
+                  "443",       "--", "true", NULL};
+
+  assert(parse_cmd_line(9, argv, &opts) == 0);
+  assert(opts.allow_unix_sockets == 1);
+  assert(opts.allow_network_sockets == 1);
+  assert(opts.n_r == 1);
+  assert(strcmp(opts.r_dir[0], "/usr") == 0);
+  assert(opts.n_connect == 1);
+  assert(opts.connect_ports[0] == 443);
+
+  cmd_opts_free(&opts);
+}
+
 /* the restrict-self flags are boolean and accumulate */
 void test_restrict_flags(void) {
   struct cmd_opts opts = {0};
@@ -509,6 +551,9 @@ int main(void) {
   test_bind_port_out_of_memory();
   test_restrict_flags();
   test_restrict_flags_with_ro();
+  test_allow_unix_sockets();
+  test_allow_network_sockets();
+  test_allow_sockets_combined();
 
   printf("OK\n");
   return 0;

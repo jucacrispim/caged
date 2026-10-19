@@ -20,6 +20,7 @@
 #ifndef FAKE_SYSCALL_H
 #define FAKE_SYSCALL_H
 #include <stddef.h>
+#include <stdint.h>
 
 struct open_call {
   const char *path;
@@ -27,8 +28,10 @@ struct open_call {
   int ret_fd;
 };
 
+/* struct used in tests. It carries return values and spies
+ for the mocked tests
+*/
 struct fake_context {
-  /* configuracao das respostas */
   long abi;
   long create_ruleset_ret;
   int create_ruleset_err;
@@ -45,6 +48,13 @@ struct fake_context {
   int fail_realloc;
   int realloc_err;
 
+  int seccomp_init_null;
+  int seccomp_rule_ret;
+  /* Fail only the Nth rule call (1-based); 0 makes every call fail when
+     seccomp_rule_ret is negative.  Used to reach each deny_* step. */
+  int seccomp_rule_fail_at;
+  int seccomp_load_ret;
+
   /* spies */
   struct open_call last_open;
   int open_calls_count;
@@ -59,6 +69,15 @@ struct fake_context {
   int create_calls_count;
   int add_calls_count;
   int restrict_calls_count;
+  int ruleset_close_calls_count;
+
+  /* seccomp spies */
+  int seccomp_rule_calls_count;
+  int seccomp_load_calls_count;
+  int seccomp_release_calls_count;
+  int last_seccomp_syscall;
+  uint32_t last_seccomp_action;
+  unsigned int last_seccomp_arg_cnt;
 };
 
 extern struct fake_context fake;

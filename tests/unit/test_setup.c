@@ -291,6 +291,211 @@ void test_setup_restrict_syscall_error(void) {
   assert(fake.restrict_calls_count == 1);
 }
 
+/*
+  Number of seccomp rules added by deny_socket_families(): every family
+  except the four allowed ones, plus the "above AF_MAX" catch-all.
+*/
+static int family_rules(void) {
+  int n = 0;
+
+  for (int f = 0; f < AF_MAX; f++) {
+    if (f == AF_INET || f == AF_INET6 || f == AF_NETLINK || f == AF_UNIX) {
+      continue;
+    }
+    n++;
+  }
+  return n + 1;
+}
+
+/* Common setup for a landlock run that reaches the seccomp step. */
+static void setup_reaches_seccomp(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+}
+
+/* Make the Nth seccomp rule fail with -EINVAL. */
+static void fail_seccomp_rule_at(int n) {
+  fake.seccomp_rule_ret = -EINVAL;
+  fake.seccomp_rule_fail_at = n;
+}
+
+/* By default the filter denies unix and network sockets: all rules run and
+   the filter is loaded exactly once. */
+void test_setup_seccomp_defaults(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 7);
+  assert(fake.seccomp_load_calls_count == 1);
+  assert(fake.seccomp_release_calls_count == 1);
+  assert(fake.last_seccomp_action == SCMP_ACT_ERRNO(EACCES));
+  assert(seccomp_detail == 0);
+  assert(seccomp_failed_family == -1);
+}
+
+/* --allow-unix-sockets skips the AF_UNIX rule */
+void test_setup_seccomp_allow_unix(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.allow_unix_sockets = 1;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 6);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* --allow-network-sockets skips the three network family rules */
+void test_setup_seccomp_allow_network(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.allow_network_sockets = 1;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 4);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* both flags together skip four rules */
+void test_setup_seccomp_allow_both(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.allow_unix_sockets = 1;
+  opts.allow_network_sockets = 1;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 3);
+}
+
+void test_setup_seccomp_init_error(void) {
+  setup_reaches_seccomp();
+  fake.seccomp_init_null = 1;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_INIT);
+  assert(fake.seccomp_rule_calls_count == 0);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+/* a family rule fails: the code says so and reports which family */
+void test_setup_seccomp_families_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(1);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_FAMILIES);
+  assert(seccomp_detail == -EINVAL);
+  assert(seccomp_failed_family == 0);
+  assert(fake.seccomp_release_calls_count == 1);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+/* the "above AF_MAX" rule fails: no family is to blame */
+void test_setup_seccomp_above_af_max_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules());
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_FAMILIES);
+  assert(seccomp_detail == -EINVAL);
+  assert(seccomp_failed_family == -1);
+}
+
+void test_setup_seccomp_inet_raw_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 1);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_INET_RAW);
+  assert(seccomp_detail == -EINVAL);
+  assert(seccomp_failed_family == -1);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+/* the second raw rule (AF_INET6) fails */
+void test_setup_seccomp_inet6_raw_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 2);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_INET_RAW);
+  assert(seccomp_detail == -EINVAL);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+void test_setup_seccomp_netlink_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 3);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_NETLINK);
+  assert(seccomp_failed_family == -1);
+}
+
+void test_setup_seccomp_unix_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 4);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_UNIX);
+}
+
+void test_setup_seccomp_network_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 5);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_NETWORK);
+}
+
+/* the second and third network rules (AF_INET6, AF_NETLINK) fail */
+void test_setup_seccomp_network_inet6_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 6);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_NETWORK);
+  assert(seccomp_detail == -EINVAL);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+void test_setup_seccomp_network_netlink_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 7);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_NETWORK);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+/* the filter is built but cannot be installed */
+void test_setup_seccomp_load_error(void) {
+  setup_reaches_seccomp();
+  fake.seccomp_load_ret = -EPERM;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_LOAD);
+  assert(fake.seccomp_load_calls_count == 1);
+  assert(fake.seccomp_release_calls_count == 1);
+}
+
 /* test if every  return code have a message */
 void test_strreturn(void) {
   enum caged_return codes[] = {
@@ -302,6 +507,13 @@ void test_strreturn(void) {
       CAGED_ERR_CONNECT_ACCESS,
       CAGED_ERR_BIND_ACCESS,
       CAGED_ERR_RESTRICT_SELF,
+      CAGED_ERR_SECCOMP_INIT,
+      CAGED_ERR_SECCOMP_FAMILIES,
+      CAGED_ERR_SECCOMP_INET_RAW,
+      CAGED_ERR_SECCOMP_NETLINK,
+      CAGED_ERR_SECCOMP_UNIX,
+      CAGED_ERR_SECCOMP_NETWORK,
+      CAGED_ERR_SECCOMP_LOAD,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
     const char *msg = caged_strreturn(codes[i]);
@@ -424,6 +636,21 @@ int main(void) {
   test_setup_allow_rw_error();
   test_setup_restrict_prctl_error();
   test_setup_restrict_syscall_error();
+  test_setup_seccomp_defaults();
+  test_setup_seccomp_allow_unix();
+  test_setup_seccomp_allow_network();
+  test_setup_seccomp_allow_both();
+  test_setup_seccomp_init_error();
+  test_setup_seccomp_families_error();
+  test_setup_seccomp_above_af_max_error();
+  test_setup_seccomp_inet_raw_error();
+  test_setup_seccomp_inet6_raw_error();
+  test_setup_seccomp_netlink_error();
+  test_setup_seccomp_unix_error();
+  test_setup_seccomp_network_error();
+  test_setup_seccomp_network_inet6_error();
+  test_setup_seccomp_network_netlink_error();
+  test_setup_seccomp_load_error();
   test_strreturn();
   test_strreturn_unknown_error();
   test_warn_none_when_all_supported();

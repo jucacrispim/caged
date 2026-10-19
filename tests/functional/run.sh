@@ -224,8 +224,8 @@ test_scope_abstract_unix_denied_by_default() {
   sleep 1
   $CAGED $RO_PY -- python3 -c "
 import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect('\0$name')
 except PermissionError:
     sys.exit(3)
@@ -243,10 +243,10 @@ test_scope_abstract_unix_allowed_with_flag() {
   name="caged-abs-$$-ok"
   srv=$(start_abs_server "$name")
   sleep 1
-  $CAGED $RO_PY --allow-scoped-abstract-unix -- python3 -c "
+  $CAGED $RO_PY --allow-unix-sockets --allow-scoped-abstract-unix -- python3 -c "
 import socket, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.connect('\0$name')
 except OSError:
     sys.exit(3)
@@ -296,8 +296,8 @@ stop_tcp_server() {
 tcp_connect_rc() {
   $CAGED $RO_PY $1 -- python3 -c "
 import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.connect(('127.0.0.1', $2))
 except PermissionError:
     sys.exit(3)
@@ -312,8 +312,8 @@ sys.exit(0)
 tcp_bind_rc() {
   $CAGED $RO_PY $1 -- python3 -c "
 import socket, sys
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(('127.0.0.1', 0))
 except PermissionError:
     sys.exit(3)
@@ -333,7 +333,7 @@ test_net_connect_denied_by_default() {
 
 test_net_connect_allowed_by_port() {
   start_tcp_server
-  tcp_connect_rc "--allow-connect-port $TCP_PORT" "$TCP_PORT"
+  tcp_connect_rc "--allow-network-sockets --allow-connect-port $TCP_PORT" "$TCP_PORT"
   rc=$?
   stop_tcp_server
   check "tcp connect allowed with --allow-connect-port" 0 "$rc"
@@ -341,7 +341,7 @@ test_net_connect_allowed_by_port() {
 
 test_net_connect_allowed_general() {
   start_tcp_server
-  tcp_connect_rc "--allow-connect-tcp" "$TCP_PORT"
+  tcp_connect_rc "--allow-network-sockets --allow-connect-tcp" "$TCP_PORT"
   rc=$?
   stop_tcp_server
   check "tcp connect allowed with --allow-connect-tcp" 0 "$rc"
@@ -354,13 +354,13 @@ test_net_bind_denied_by_default() {
 }
 
 test_net_bind_allowed_by_port() {
-  tcp_bind_rc "--allow-bind-port 0"
+  tcp_bind_rc "--allow-network-sockets --allow-bind-port 0"
   rc=$?
   check "tcp bind allowed with --allow-bind-port 0" 0 "$rc"
 }
 
 test_net_bind_allowed_general() {
-  tcp_bind_rc "--allow-bind-tcp"
+  tcp_bind_rc "--allow-network-sockets --allow-bind-tcp"
   rc=$?
   check "tcp bind allowed with --allow-bind-tcp" 0 "$rc"
 }

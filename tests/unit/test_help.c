@@ -67,6 +67,8 @@ void test_print_help(void) {
   assert(strstr(buf, "--log-new-exec-on") != NULL);
   assert(strstr(buf, "--log-subdomains-off") != NULL);
   assert(strstr(buf, "--tsync") != NULL);
+  assert(strstr(buf, "--allow-unix-sockets") != NULL);
+  assert(strstr(buf, "--allow-network-sockets") != NULL);
   assert(strstr(buf, "--help") != NULL);
   assert(strstr(buf, "CAGED_DISABLE_WARNINGS") != NULL);
 }

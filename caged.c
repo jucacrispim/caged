@@ -21,10 +21,13 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/landlock.h>
+#include <linux/netlink.h>
+#include <seccomp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -49,6 +52,12 @@
 #endif
 #ifndef LANDLOCK_RESTRICT_SELF_TSYNC
 #define LANDLOCK_RESTRICT_SELF_TSYNC (1ULL << 3)
+#endif
+
+/* I need to define this here because it's not defined in any
+ header I can include.*/
+#ifndef SOCK_TYPE_MASK
+#define SOCK_TYPE_MASK 0xf
 #endif
 
 /* fs access handled by the latest api */
@@ -93,6 +102,15 @@
    LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |                                    \
    LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
 
+/*
+  Detail of the last seccomp failure.  `seccomp_detail` holds the negative
+  errno returned by libseccomp  and `seccomp_failed_family` holds the socket
+  family whose rule could not be added. They exist so the caller know which
+  error happend.
+*/
+static int seccomp_detail;
+static int seccomp_failed_family = -1;
+
 enum caged_return {
   CAGED_OK = 0,
   CAGED_ERR_NO_LANDLOCK,
@@ -102,6 +120,13 @@ enum caged_return {
   CAGED_ERR_CONNECT_ACCESS,
   CAGED_ERR_BIND_ACCESS,
   CAGED_ERR_RESTRICT_SELF,
+  CAGED_ERR_SECCOMP_INIT,
+  CAGED_ERR_SECCOMP_FAMILIES,
+  CAGED_ERR_SECCOMP_INET_RAW,
+  CAGED_ERR_SECCOMP_NETLINK,
+  CAGED_ERR_SECCOMP_UNIX,
+  CAGED_ERR_SECCOMP_NETWORK,
+  CAGED_ERR_SECCOMP_LOAD,
 };
 
 struct cmd_opts {
@@ -120,28 +145,11 @@ struct cmd_opts {
   unsigned short *bind_ports;
   int n_bind;
   int cap_bind;
+  int allow_unix_sockets;
+  int allow_network_sockets;
   char **cmd;
   int help;
 };
-
-/*
-  Appends `path` to a dynamic list, growing the backing array (doubling its
-  capacity) when it is full. Returns 0 on success, -1 on allocation failure.
-*/
-static int push_path(const char ***list, int *n, int *cap, const char *path) {
-  if (*n == *cap) {
-    int new_cap = *cap ? *cap * 2 : 4;
-    const char **grown =
-        realloc((void *)*list, (size_t)new_cap * sizeof **list);
-    if (grown == NULL) {
-      return -1;
-    }
-    *list = grown;
-    *cap = new_cap;
-  }
-  (*list)[(*n)++] = path;
-  return 0;
-}
 
 /* Releases the memory held by the lists of a cmd_opts. */
 static void cmd_opts_free(struct cmd_opts *opts) {
@@ -161,40 +169,6 @@ static void cmd_opts_free(struct cmd_opts *opts) {
   opts->cap_rw = 0;
   opts->cap_connect = 0;
   opts->cap_bind = 0;
-}
-
-/*
-  Appends `port` to a dynamic list, growing the backing array (doubling its
-  capacity) when it is full. Returns 0 on success, -1 on allocation failure.
-*/
-static int push_port(unsigned short **list, int *n, int *cap,
-                     unsigned short port) {
-  if (*n == *cap) {
-    int new_cap = *cap ? *cap * 2 : 4;
-    unsigned short *grown = realloc(*list, (size_t)new_cap * sizeof **list);
-    if (grown == NULL) {
-      return -1;
-    }
-    *list = grown;
-    *cap = new_cap;
-  }
-  (*list)[(*n)++] = port;
-  return 0;
-}
-
-/*
-  Parses a decimal port number into `out`. Returns 0 on success, -1 when the
-  string is not a valid port in the 0..65535 range.
-*/
-static int parse_port(const char *s, unsigned short *out) {
-  char *end;
-  errno = 0;
-  unsigned long v = strtoul(s, &end, 10);
-  if (end == s || *end != '\0' || errno != 0 || v > 65535) {
-    return -1;
-  }
-  *out = (unsigned short)v;
-  return 0;
 }
 
 /*
@@ -302,49 +276,6 @@ static unsigned long get_supported_restrict_flags(long abi) {
   return flags;
 }
 
-/* A feature implemented by caged and the Landlock ABI that introduced it. */
-struct feature {
-  long min_abi;
-  const char *name;
-};
-
-static const struct feature FEATURES[] = {
-    {4, "network access control"},
-    {5, "ioctl on device files"},
-    {6, "IPC scopes"},
-    {7, "restrict-self log flags"},
-    {8, "restrict-self TSYNC"},
-    {9, "UNIX socket name resolution"},
-};
-
-/*
-  Warns on stderr about every feature the running kernel cannot support
-  because its Landlock ABI is older than the one that introduced it. This is
-  only a warning, not an error: caged still runs with the features that are
-  available.
-*/
-static void warn_unsupported_features(long abi) {
-  const char *disable = getenv("CAGED_DISABLE_WARNINGS");
-  if (disable != NULL && strcmp(disable, "1") == 0) {
-    return;
-  }
-  size_t n = sizeof FEATURES / sizeof FEATURES[0];
-  int warned = 0;
-  for (size_t k = 0; k < n; k++) {
-    if (FEATURES[k].min_abi > abi) {
-      if (!warned) {
-        fprintf(stderr,
-                "caged: warning: Landlock ABI %ld does not support some "
-                "features; they are unavailable:\n",
-                abi);
-        warned = 1;
-      }
-      fprintf(stderr, "caged: warning:   - %s (needs ABI %ld)\n",
-              FEATURES[k].name, FEATURES[k].min_abi);
-    }
-  }
-}
-
 /* Grant some kind of access for a given path */
 static int allow_access(int ruleset_fd, const char *path,
                         struct landlock_path_beneath_attr *pb) {
@@ -405,6 +336,162 @@ static int allow_net_bind_access(int ruleset_fd, unsigned short port) {
   return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_BIND_TCP, port);
 }
 
+/*
+  Blocks the use of all socket families except for AF_INET, AF_INET6,
+  AF_NETLINK and AF_UNIX. These have individual rules for each one.
+*/
+static int deny_socket_families(scmp_filter_ctx ctx) {
+  int r;
+
+  for (int f = 0; f < AF_MAX; f++) {
+    if (f == AF_INET || f == AF_INET6 || f == AF_NETLINK || f == AF_UNIX) {
+      continue;
+    }
+    r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+                               SCMP_A0(SCMP_CMP_EQ, f));
+    if (r < 0) {
+      seccomp_detail = r;
+      seccomp_failed_family = f;
+      return -1;
+    }
+  }
+  /* Families numbered above this build's AF_MAX: a newer kernel may know
+     them.  seccomp runs before the kernel validates the argument, so this
+     also catches nonsense such as socket(-1, ...).
+  */
+  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+                             SCMP_A0(SCMP_CMP_GE, AF_MAX));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  return 0;
+}
+
+/* Blocks the use of AF_INET and AF_INET6 SOCK_RAW as this could be used to
+   manually craft packets that could bypass the landlock rules.  Both the
+   family and the type are compared: SOCK_RAW alone would also match
+   AF_NETLINK, which glibc needs (if_nameindex), so AF_NETLINK must survive.
+*/
+static int deny_inet_raw(scmp_filter_ctx ctx) {
+  int r;
+
+  r = seccomp_rule_add_exact(
+      ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 2,
+      SCMP_A0(SCMP_CMP_EQ, AF_INET),
+      SCMP_A1(SCMP_CMP_MASKED_EQ, SOCK_TYPE_MASK, SOCK_RAW));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  r = seccomp_rule_add_exact(
+      ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 2,
+      SCMP_A0(SCMP_CMP_EQ, AF_INET6),
+      SCMP_A1(SCMP_CMP_MASKED_EQ, SOCK_TYPE_MASK, SOCK_RAW));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  return 0;
+}
+
+/* Blocks the use of AF_NETLINK NETLINK_USERSOCK as this protocol is
+   used to IPC.  The family is compared too: protocol 2 is also
+   IPPROTO_IGMP, so a lone A2 comparison would break raw IGMP.
+*/
+static int deny_netlink_usersock(scmp_filter_ctx ctx) {
+  int r;
+
+  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 2,
+                             SCMP_A0(SCMP_CMP_EQ, AF_NETLINK),
+                             SCMP_A2(SCMP_CMP_EQ, NETLINK_USERSOCK));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  return 0;
+}
+
+/* Blocks the use of AF_UNIX. Used for IPC */
+static int deny_unix_sockets(scmp_filter_ctx ctx) {
+  int r;
+
+  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+                             SCMP_A0(SCMP_CMP_EQ, AF_UNIX));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  return 0;
+}
+
+/* Blocks the use of AF_INET, AF_INET6 and AF_NETLINK */
+static int deny_network_sockets(scmp_filter_ctx ctx) {
+  int r;
+
+  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+                             SCMP_A0(SCMP_CMP_EQ, AF_INET));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+                             SCMP_A0(SCMP_CMP_EQ, AF_INET6));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
+                             SCMP_A0(SCMP_CMP_EQ, AF_NETLINK));
+  if (r < 0) {
+    seccomp_detail = r;
+    return -1;
+  }
+  return 0;
+}
+
+/*
+  Builds and installs the seccomp filter.  Must run after restrict_self: the
+  no_new_privs flag it sets is what lets seccomp_load work unprivileged.
+  Returns CAGED_OK on success, or the code of the step that failed.
+*/
+static enum caged_return apply_seccomp(int allow_unix_sockets,
+                                       int allow_network_sockets) {
+  scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
+
+  seccomp_detail = 0;
+  seccomp_failed_family = -1;
+  if (ctx == NULL) {
+    return CAGED_ERR_SECCOMP_INIT;
+  }
+  if (deny_socket_families(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_FAMILIES;
+  }
+  if (deny_inet_raw(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_INET_RAW;
+  }
+  if (deny_netlink_usersock(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_NETLINK;
+  }
+  if (!allow_unix_sockets && deny_unix_sockets(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_UNIX;
+  }
+  if (!allow_network_sockets && deny_network_sockets(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_NETWORK;
+  }
+  if (seccomp_load(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_LOAD;
+  }
+  seccomp_release(ctx);
+  return CAGED_OK;
+}
+
 static const char *caged_strreturn(enum caged_return r) {
   switch (r) {
   case CAGED_OK:
@@ -423,6 +510,20 @@ static const char *caged_strreturn(enum caged_return r) {
     return "error allowing bind access";
   case CAGED_ERR_RESTRICT_SELF:
     return "error restricting self";
+  case CAGED_ERR_SECCOMP_INIT:
+    return "error creating seccomp filter";
+  case CAGED_ERR_SECCOMP_FAMILIES:
+    return "error denying socket families";
+  case CAGED_ERR_SECCOMP_INET_RAW:
+    return "error denying raw sockets";
+  case CAGED_ERR_SECCOMP_NETLINK:
+    return "error denying netlink usersock";
+  case CAGED_ERR_SECCOMP_UNIX:
+    return "error denying unix sockets";
+  case CAGED_ERR_SECCOMP_NETWORK:
+    return "error denying network sockets";
+  case CAGED_ERR_SECCOMP_LOAD:
+    return "error loading seccomp filter";
   }
   return "unknown error";
 }
@@ -441,38 +542,138 @@ static int fatal(const char *msg) {
 
 /* Prints the command usage to the given stream. */
 static void print_help(FILE *out) {
-  fprintf(out, "usage: caged [OPTIONS] -- CMD [ARGS...]\n"
-         "\n"
-         "Run CMD in a Landlock sandbox. Filesystem, network and IPC access\n"
-         "is denied by default; only what is explicitly allowed is "
-         "reachable.\n"
-         "\n"
-         "Options:\n"
-         "  --ro PATH                      allow reading PATH (file or "
-         "directory)\n"
-         "  --rw PATH                      allow reading and writing PATH\n"
-         "  --allow-connect-port PORT      allow TCP connect to PORT (0 = "
-         "ephemeral)\n"
-         "  --allow-bind-port PORT         allow TCP bind to PORT (0 = "
-         "ephemeral)\n"
-         "  --allow-connect-tcp            allow TCP connect to any port\n"
-         "  --allow-bind-tcp               allow TCP bind to any port\n"
-         "  --allow-scoped-signal          allow signalling outside the "
-         "sandbox\n"
-         "  --allow-scoped-abstract-unix   allow abstract unix socket "
-         "connects\n"
-         "  --log-same-exec-off            no audit log before execve (ABI >= "
-         "7)\n"
-         "  --log-new-exec-on              audit log after execve (ABI >= 7)\n"
-         "  --log-subdomains-off           no audit log for subdomains (ABI >= "
-         "7)\n"
-         "  --tsync                        apply the sandbox to all threads "
-         "(ABI >= 8)\n"
-         "  -h, --help                     show this help and exit\n"
-         "\n"
-         "Environment:\n"
-         "  CAGED_DISABLE_WARNINGS=1       silence kernel ABI compatibility "
-         "warnings\n");
+  fprintf(
+      out,
+      "usage: caged [OPTIONS] -- CMD [ARGS...]\n"
+      "\n"
+      "Run CMD in a Landlock sandbox. Filesystem, network and IPC access\n"
+      "is denied by default; only what is explicitly allowed is "
+      "reachable.\n"
+      "\n"
+      "Options:\n"
+      "  --ro PATH                      allow reading PATH (file or "
+      "directory)\n"
+      "  --rw PATH                      allow reading and writing PATH\n"
+      "  --allow-connect-port PORT      allow TCP connect to PORT (0 = "
+      "ephemeral)\n"
+      "  --allow-bind-port PORT         allow TCP bind to PORT (0 = "
+      "ephemeral)\n"
+      "  --allow-connect-tcp            allow TCP connect to any port\n"
+      "  --allow-bind-tcp               allow TCP bind to any port\n"
+      "  --allow-scoped-signal          allow signalling outside the "
+      "sandbox\n"
+      "  --allow-scoped-abstract-unix   allow abstract unix socket "
+      "connects\n"
+      "  --log-same-exec-off            no audit log before execve (ABI >= "
+      "7)\n"
+      "  --log-new-exec-on              audit log after execve (ABI >= 7)\n"
+      "  --log-subdomains-off           no audit log for subdomains (ABI >= "
+      "7)\n"
+      "  --tsync                        apply the sandbox to all threads "
+      "(ABI >= 8)\n"
+      "  --allow-unix-sockets           allow AF_UNIX sockets (IPC)\n"
+      "  --allow-network-sockets        allow AF_INET, AF_INET6, AF_NETLINK\n"
+      "  -h, --help                     show this help and exit\n"
+      "\n"
+      "Environment:\n"
+      "  CAGED_DISABLE_WARNINGS=1       silence kernel ABI compatibility "
+      "warnings\n");
+}
+
+/* A feature implemented by caged and the Landlock ABI that introduced it. */
+struct feature {
+  long min_abi;
+  const char *name;
+};
+
+static const struct feature FEATURES[] = {
+    {4, "network access control"},
+    {5, "ioctl on device files"},
+    {6, "IPC scopes"},
+    {7, "restrict-self log flags"},
+    {8, "restrict-self TSYNC"},
+    {9, "UNIX socket name resolution"},
+};
+
+/*
+  Warns on stderr about every feature the running kernel cannot support
+  because its Landlock ABI is older than the one that introduced it. This is
+  only a warning, not an error: caged still runs with the features that are
+  available.
+*/
+static void warn_unsupported_features(long abi) {
+  const char *disable = getenv("CAGED_DISABLE_WARNINGS");
+  if (disable != NULL && strcmp(disable, "1") == 0) {
+    return;
+  }
+  size_t n = sizeof FEATURES / sizeof FEATURES[0];
+  int warned = 0;
+  for (size_t k = 0; k < n; k++) {
+    if (FEATURES[k].min_abi > abi) {
+      if (!warned) {
+        fprintf(stderr,
+                "caged: warning: Landlock ABI %ld does not support some "
+                "features; they are unavailable:\n",
+                abi);
+        warned = 1;
+      }
+      fprintf(stderr, "caged: warning:   - %s (needs ABI %ld)\n",
+              FEATURES[k].name, FEATURES[k].min_abi);
+    }
+  }
+}
+
+/*
+  Appends `path` to a dynamic list, growing the backing array (doubling its
+  capacity) when it is full. Returns 0 on success, -1 on allocation failure.
+*/
+static int push_path(const char ***list, int *n, int *cap, const char *path) {
+  if (*n == *cap) {
+    int new_cap = *cap ? *cap * 2 : 4;
+    const char **grown =
+        realloc((void *)*list, (size_t)new_cap * sizeof **list);
+    if (grown == NULL) {
+      return -1;
+    }
+    *list = grown;
+    *cap = new_cap;
+  }
+  (*list)[(*n)++] = path;
+  return 0;
+}
+
+/*
+  Parses a decimal port number into `out`. Returns 0 on success, -1 when the
+  string is not a valid port in the 0..65535 range.
+*/
+static int parse_port(const char *s, unsigned short *out) {
+  char *end;
+  errno = 0;
+  unsigned long v = strtoul(s, &end, 10);
+  if (end == s || *end != '\0' || errno != 0 || v > 65535) {
+    return -1;
+  }
+  *out = (unsigned short)v;
+  return 0;
+}
+
+/*
+  Appends `port` to a dynamic list, growing the backing array (doubling its
+  capacity) when it is full. Returns 0 on success, -1 on allocation failure.
+*/
+static int push_port(unsigned short **list, int *n, int *cap,
+                     unsigned short port) {
+  if (*n == *cap) {
+    int new_cap = *cap ? *cap * 2 : 4;
+    unsigned short *grown = realloc(*list, (size_t)new_cap * sizeof **list);
+    if (grown == NULL) {
+      return -1;
+    }
+    *list = grown;
+    *cap = new_cap;
+  }
+  (*list)[(*n)++] = port;
+  return 0;
 }
 
 static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
@@ -516,6 +717,12 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
       i += 1;
     } else if (strcmp(argv[i], "--tsync") == 0) {
       opts->restrict_flags |= LANDLOCK_RESTRICT_SELF_TSYNC;
+      i += 1;
+    } else if (strcmp(argv[i], "--allow-unix-sockets") == 0) {
+      opts->allow_unix_sockets = 1;
+      i += 1;
+    } else if (strcmp(argv[i], "--allow-network-sockets") == 0) {
+      opts->allow_network_sockets = 1;
       i += 1;
     } else if (strcmp(argv[i], "--allow-connect-tcp") == 0) {
       if (opts->n_connect > 0) {
@@ -625,7 +832,8 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
                                  get_supported_restrict_flags(abi)) < 0) {
     return CAGED_ERR_RESTRICT_SELF;
   }
-  return CAGED_OK;
+  close(ruleset);
+  return apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets);
 }
 
 /* GCOV_EXCL_START */
@@ -645,6 +853,12 @@ int main(int argc, char *argv[]) {
 
   enum caged_return r = caged_setup(&opts);
   if (r != CAGED_OK) {
+    if (seccomp_detail < -1) {
+      errno = -seccomp_detail;
+    }
+    if (seccomp_failed_family >= 0) {
+      fprintf(stderr, "caged: socket family %d\n", seccomp_failed_family);
+    }
     die(caged_strreturn(r));
   }
 

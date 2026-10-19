@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/landlock.h>
+#include <seccomp.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -152,6 +153,12 @@ int __wrap_fstat(int fd, struct stat *st) {
 }
 
 int __wrap_close(int fd) {
+  /* The ruleset fd comes from create_ruleset, not from open: never let it
+     reach the real close(), or the test process loses a real descriptor. */
+  if (fd >= 0 && fd == (int)fake.create_ruleset_ret) {
+    fake.ruleset_close_calls_count++;
+    return 0;
+  }
   if (fd != fake.open_ret) {
     return __real_close(fd);
   }
@@ -168,4 +175,61 @@ int __wrap_prctl(int option, ...) {
     errno = fake.prctl_err;
   }
   return fake.prctl_ret;
+}
+
+/*
+  seccomp mocks. The real filter must never be installed in a unit test: it
+  is irreversible, applies to the test process itself and breaks libgcov.
+  A non-NULL sentinel stands in for the real context.
+*/
+scmp_filter_ctx __wrap_seccomp_init(uint32_t def_action) {
+  (void)def_action;
+  if (fake.seccomp_init_null) {
+    return NULL;
+  }
+  return (scmp_filter_ctx)(void *)&fake;
+}
+
+/* Variadic, like the real one: the comparisons must be walked or the va_list
+   is left in an inconsistent state. The fake is authoritative here. */
+int __wrap_seccomp_rule_add_exact(scmp_filter_ctx ctx, uint32_t action,
+                                  int syscall, unsigned int arg_cnt, ...) {
+  va_list ap;
+
+  (void)ctx;
+  fake.seccomp_rule_calls_count++;
+  fake.last_seccomp_action = action;
+  fake.last_seccomp_syscall = syscall;
+  fake.last_seccomp_arg_cnt = arg_cnt;
+
+  va_start(ap, arg_cnt);
+  for (unsigned int k = 0; k < arg_cnt; k++) {
+    (void)va_arg(ap, struct scmp_arg_cmp);
+  }
+  va_end(ap);
+
+  if (fake.seccomp_rule_ret >= 0) {
+    return fake.seccomp_rule_ret;
+  }
+  /* fail_at == 0 keeps the old behaviour: every call fails. */
+  if (fake.seccomp_rule_fail_at != 0 &&
+      fake.seccomp_rule_calls_count != fake.seccomp_rule_fail_at) {
+    return 0;
+  }
+  errno = -fake.seccomp_rule_ret;
+  return fake.seccomp_rule_ret;
+}
+
+int __wrap_seccomp_load(scmp_filter_ctx ctx) {
+  if (ctx == NULL) {
+    return -EINVAL;
+  }
+  fake.seccomp_load_calls_count++;
+  return fake.seccomp_load_ret;
+}
+
+int __wrap_seccomp_release(scmp_filter_ctx ctx) {
+  (void)ctx;
+  fake.seccomp_release_calls_count++;
+  return 0;
 }
