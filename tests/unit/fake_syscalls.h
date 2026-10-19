@@ -50,10 +50,12 @@ struct fake_context {
 
   int seccomp_init_null;
   int seccomp_rule_ret;
-  /* Fail only the Nth rule call (1-based); 0 makes every call fail when
+  /* Fail only the Nth rule call). 0 makes every call fail when
      seccomp_rule_ret is negative.  Used to reach each deny_* step. */
   int seccomp_rule_fail_at;
   int seccomp_load_ret;
+  /* Fail the Nth seccomp_syscall_resolve_name(). 0 resolves all. */
+  int seccomp_resolve_fail_at;
 
   /* spies */
   struct open_call last_open;
@@ -78,6 +80,7 @@ struct fake_context {
   int last_seccomp_syscall;
   uint32_t last_seccomp_action;
   unsigned int last_seccomp_arg_cnt;
+  int seccomp_resolve_calls_count;
 };
 
 extern struct fake_context fake;

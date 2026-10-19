@@ -172,13 +172,12 @@ void test_setup_restrict_flags(void) {
   fake.restrict_self_ret = 0;
 
   struct cmd_opts opts = {0};
-  opts.restrict_flags = LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
-                        LANDLOCK_RESTRICT_SELF_TSYNC;
+  opts.restrict_flags =
+      LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON | LANDLOCK_RESTRICT_SELF_TSYNC;
 
   assert(caged_setup(&opts) == CAGED_OK);
-  assert(fake.last_restrict_flags ==
-         (LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
-          LANDLOCK_RESTRICT_SELF_TSYNC));
+  assert(fake.last_restrict_flags == (LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
+                                      LANDLOCK_RESTRICT_SELF_TSYNC));
 }
 
 /* below ABI 7 the log flags are masked out (consistent with scopes) */
@@ -307,6 +306,11 @@ static int family_rules(void) {
   return n + 1;
 }
 
+/* Number of rules added by deny_sysv_ipc(): one per SysV IPC syscall. */
+static int sysv_rules(void) {
+  return (int)(sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0]);
+}
+
 /* Common setup for a landlock run that reaches the seccomp step. */
 static void setup_reaches_seccomp(void) {
   reset_fake();
@@ -329,10 +333,10 @@ void test_setup_seccomp_defaults(void) {
   struct cmd_opts opts = {0};
 
   assert(caged_setup(&opts) == CAGED_OK);
-  assert(fake.seccomp_rule_calls_count == family_rules() + 7);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 7 + sysv_rules());
   assert(fake.seccomp_load_calls_count == 1);
   assert(fake.seccomp_release_calls_count == 1);
-  assert(fake.last_seccomp_action == SCMP_ACT_ERRNO(EACCES));
+  assert(fake.last_seccomp_action == SCMP_ACT_ERRNO(ENOSYS));
   assert(seccomp_detail == 0);
   assert(seccomp_failed_family == -1);
 }
@@ -345,7 +349,7 @@ void test_setup_seccomp_allow_unix(void) {
   opts.allow_unix_sockets = 1;
 
   assert(caged_setup(&opts) == CAGED_OK);
-  assert(fake.seccomp_rule_calls_count == family_rules() + 6);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 6 + sysv_rules());
   assert(fake.seccomp_load_calls_count == 1);
 }
 
@@ -357,7 +361,7 @@ void test_setup_seccomp_allow_network(void) {
   opts.allow_network_sockets = 1;
 
   assert(caged_setup(&opts) == CAGED_OK);
-  assert(fake.seccomp_rule_calls_count == family_rules() + 4);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 4 + sysv_rules());
   assert(fake.seccomp_load_calls_count == 1);
 }
 
@@ -370,7 +374,59 @@ void test_setup_seccomp_allow_both(void) {
   opts.allow_network_sockets = 1;
 
   assert(caged_setup(&opts) == CAGED_OK);
-  assert(fake.seccomp_rule_calls_count == family_rules() + 3);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 3 + sysv_rules());
+}
+
+/* --allow-sysv-ipc skips the whole SysV IPC table */
+void test_setup_seccomp_allow_sysv_ipc(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.allow_sysv_ipc = 1;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 7);
+  assert(fake.seccomp_resolve_calls_count == 0);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* a SysV rule fails: the code says so and the filter is not loaded */
+void test_setup_seccomp_sysv_ipc_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 8);
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_SYSVIPC);
+  assert(seccomp_detail == -EINVAL);
+  assert(seccomp_failed_family == -1);
+  assert(fake.seccomp_load_calls_count == 0);
+  assert(fake.seccomp_release_calls_count == 1);
+}
+
+/* the last SysV rule fails: the loop runs the whole table before giving up */
+void test_setup_seccomp_sysv_ipc_last_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 7 + sysv_rules());
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_SYSVIPC);
+  assert(fake.seccomp_resolve_calls_count == sysv_rules());
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
+/* a syscall name libseccomp cannot resolve fails closed */
+void test_setup_seccomp_sysv_ipc_resolve_error(void) {
+  setup_reaches_seccomp();
+  fake.seccomp_resolve_fail_at = 3;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_ERR_SECCOMP_SYSVIPC);
+  assert(seccomp_detail == -ENOSYS);
+  assert(fake.seccomp_rule_calls_count == family_rules() + 7 + 2);
+  assert(fake.seccomp_load_calls_count == 0);
 }
 
 void test_setup_seccomp_init_error(void) {
@@ -513,6 +569,7 @@ void test_strreturn(void) {
       CAGED_ERR_SECCOMP_NETLINK,
       CAGED_ERR_SECCOMP_UNIX,
       CAGED_ERR_SECCOMP_NETWORK,
+      CAGED_ERR_SECCOMP_SYSVIPC,
       CAGED_ERR_SECCOMP_LOAD,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
@@ -640,6 +697,7 @@ int main(void) {
   test_setup_seccomp_allow_unix();
   test_setup_seccomp_allow_network();
   test_setup_seccomp_allow_both();
+  test_setup_seccomp_allow_sysv_ipc();
   test_setup_seccomp_init_error();
   test_setup_seccomp_families_error();
   test_setup_seccomp_above_af_max_error();
@@ -650,6 +708,9 @@ int main(void) {
   test_setup_seccomp_network_error();
   test_setup_seccomp_network_inet6_error();
   test_setup_seccomp_network_netlink_error();
+  test_setup_seccomp_sysv_ipc_error();
+  test_setup_seccomp_sysv_ipc_last_error();
+  test_setup_seccomp_sysv_ipc_resolve_error();
   test_setup_seccomp_load_error();
   test_strreturn();
   test_strreturn_unknown_error();

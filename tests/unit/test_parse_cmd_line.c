@@ -462,6 +462,19 @@ void test_allow_network_sockets(void) {
   cmd_opts_free(&opts);
 }
 
+/* --allow-sysv-ipc releases the SysV IPC ban */
+void test_allow_sysv_ipc(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--allow-sysv-ipc", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.allow_sysv_ipc == 1);
+  assert(opts.allow_unix_sockets == 0);
+  assert(opts.allow_network_sockets == 0);
+
+  cmd_opts_free(&opts);
+}
+
 /* both socket flags combine with the path options, order preserved */
 void test_allow_sockets_combined(void) {
   struct cmd_opts opts = {0};
@@ -553,6 +566,7 @@ int main(void) {
   test_restrict_flags_with_ro();
   test_allow_unix_sockets();
   test_allow_network_sockets();
+  test_allow_sysv_ipc();
   test_allow_sockets_combined();
 
   printf("OK\n");

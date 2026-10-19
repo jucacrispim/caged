@@ -233,3 +233,15 @@ int __wrap_seccomp_release(scmp_filter_ctx ctx) {
   fake.seccomp_release_calls_count++;
   return 0;
 }
+
+extern int __real_seccomp_syscall_resolve_name(const char *name);
+
+/* By default the real lookup runs. */
+int __wrap_seccomp_syscall_resolve_name(const char *name) {
+  fake.seccomp_resolve_calls_count++;
+  if (fake.seccomp_resolve_fail_at != 0 &&
+      fake.seccomp_resolve_calls_count == fake.seccomp_resolve_fail_at) {
+    return __NR_SCMP_ERROR;
+  }
+  return __real_seccomp_syscall_resolve_name(name);
+}

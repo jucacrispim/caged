@@ -365,6 +365,25 @@ test_net_bind_allowed_general() {
   check "tcp bind allowed with --allow-bind-tcp" 0 "$rc"
 }
 
+test_sysv_ipc_denied() {
+  $CAGED $RO -- ipcmk -M 1024 >/dev/null 2>&1
+  check_ne "sysv IPC denied by default" 0 $?
+}
+
+test_sysv_ipc_allowed_with_flag() {
+  out=$(LC_ALL=C $CAGED $RO --allow-sysv-ipc -- ipcmk -M 1024 2>/dev/null)
+  rc=$?
+  check "sysv IPC allowed with --allow-sysv-ipc" 0 "$rc"
+  # ipcmk reports the new segment as the last field of its output
+  id=$(printf '%s\n' "$out" | sed -n 's/.*: *//p')
+  if [ -n "$id" ]; then
+    ipcrm -m "$id" 2>/dev/null
+    ok "sysv IPC segment was created"
+  else
+    bad "sysv IPC segment was created (output: '$out')"
+  fi
+}
+
 # restrict-self flags ar for abi >= 7. On my system it is abi 6, so what I
 # test here is that the flags don't break the caged run. Warnings will show
 # the user what is not enabled due to kernel version.
@@ -445,6 +464,9 @@ main() {
   test_net_bind_denied_by_default
   test_net_bind_allowed_by_port
   test_net_bind_allowed_general
+
+  test_sysv_ipc_denied
+  test_sysv_ipc_allowed_with_flag
 
   test_restrict_flags_accepted
 

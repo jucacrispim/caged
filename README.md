@@ -24,6 +24,8 @@ caged [OPTIONS] -- CMD [ARGS...]
 - **IPC scopes**: signalling and abstract unix sockets are restricted by
   default; release them with `--allow-scoped-signal` /
   `--allow-scoped-abstract-unix`.
+- **System V IPC**: denied by default (shared memory, message queues and
+  semaphores fail with `ENOSYS`); release it with `--allow-sysv-ipc`.
 - **Socket families**: every family except `AF_INET`, `AF_INET6` and
   `AF_NETLINK` is denied, including `AF_UNIX`; release them with
   `--allow-network-sockets` / `--allow-unix-sockets`. Raw sockets

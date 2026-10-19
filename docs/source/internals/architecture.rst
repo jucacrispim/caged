@@ -106,6 +106,7 @@ to whatever it wants:
      CAGED_ERR_SECCOMP_NETLINK,
      CAGED_ERR_SECCOMP_UNIX,
      CAGED_ERR_SECCOMP_NETWORK,
+     CAGED_ERR_SECCOMP_SYSVIPC,
      CAGED_ERR_SECCOMP_LOAD,
    };
 
@@ -132,6 +133,7 @@ so there is no fixed upper bound:
      unsigned short *bind_ports;    int n_bind;    int cap_bind;
      int allow_unix_sockets;
      int allow_network_sockets;
+     int allow_sysv_ipc;
      char **cmd;
      int help;
    };
@@ -170,7 +172,7 @@ a `libseccomp <https://github.com/seccomp/libseccomp>`_ filter, built and
 installed by ``apply_seccomp``.
 
 The default action is ``SCMP_ACT_ALLOW`` and every rule denies, so the filter
-is an allowlist of address families, not of syscalls. Five helpers build it,
+is an allowlist of address families, not of syscalls. Six helpers build it,
 one per concern:
 
 ``deny_socket_families``
@@ -201,6 +203,19 @@ one per concern:
     ``--allow-network-sockets`` is absent. It is denied per family, so UDP and
     ICMP go down together with TCP by design: there is no way to keep one and
     drop the other.
+
+``deny_sysv_ipc``
+    The System V IPC entry points, one rule per name in the
+    ``SYSV_IPC_SYSCALLS`` table: ``msgget``/``msgsnd``/``msgrcv``/``msgctl``,
+    ``semget``/``semop``/``semtimedop``/``semctl`` and
+    ``shmget``/``shmat``/``shmdt``/``shmctl``. The action is
+    ``SCMP_ACT_ERRNO(ENOSYS)`` rather than ``EACCES``, so a caller takes its
+    "this kernel has no SysV IPC" fallback instead of failing hard. The names
+    go through ``seccomp_syscall_resolve_name``; a name the library cannot
+    resolve fails **closed** (``seccomp_detail = -ENOSYS``) instead of
+    installing a filter with a hole in it. Added only when
+    ``--allow-sysv-ipc`` is absent. The loop over the table keeps this at one
+    branch in ``caged.c`` rather than twelve.
 
 Each helper returns ``-1`` on a libseccomp failure, keeping the raw code in
 ``seccomp_detail`` and, in the family loop, the offending family in

@@ -111,3 +111,25 @@ These are bits passed to ``landlock_restrict_self`` itself, not rules:
 
 caged passes ``opts->restrict_flags & get_supported_restrict_flags(abi)``, so
 flags a given ABI cannot support are dropped rather than failing the run.
+
+System V IPC
+------------
+
+Landlock has no right for System V IPC: shared memory segments, message queues
+and semaphores are kernel objects identified by a key, not by a path, a port or
+a domain scope. Nothing in the handled mask covers them, so a Landlock-only
+sandbox leaves them wide open.
+
+``--allow-sysv-ipc`` therefore belongs to the **seccomp** layer, not to
+Landlock: without it, ``msgget``, ``semget``, ``shmget`` and every operation on
+an existing object fail with ``ENOSYS``. The action is ``ENOSYS`` rather than
+``EACCES`` on purpose — it is the error a program expects from a kernel built
+without SysV IPC, so callers fall back gracefully instead of aborting.
+
+Two related gaps stay open, and neither is seccomp's job:
+
+- **POSIX IPC** (``shm_open``, ``sem_open``, ``mq_open``) is a filesystem
+  interface: it lives in ``/dev/shm`` and ``/dev/mqueue``, so the ``--ro`` /
+  ``--rw`` grants already cover it.
+- **File descriptors already open** on a SysV object are not revoked by the
+  filter; ``close_range`` is the other half, and it is not implemented yet.

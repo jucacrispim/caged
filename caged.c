@@ -103,13 +103,37 @@
    LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
 
 /*
-  Detail of the last seccomp failure.  `seccomp_detail` holds the negative
-  errno returned by libseccomp  and `seccomp_failed_family` holds the socket
-  family whose rule could not be added. They exist so the caller know which
-  error happend.
+  `seccomp_detail` holds the error returned by libseccomp  and
+  `seccomp_failed_family` holds the socket family that a rule could not
+  be added. They exist so the caller know which error happend.
 */
 static int seccomp_detail;
 static int seccomp_failed_family = -1;
+
+/*
+  System V IPC syscalls are blocked. They will return ENOSYS
+*/
+static const char *SYSV_IPC_SYSCALLS[] = {
+    "msgget",     "msgsnd", "msgrcv", "msgctl", "semget", "semop",
+    "semtimedop", "semctl", "shmget", "shmat",  "shmdt",  "shmctl",
+};
+
+/* These feature stuff are used by the warning messages about
+   landlock features not supported by the hosts ABI
+*/
+struct feature {
+  long min_abi;
+  const char *name;
+};
+
+static const struct feature FEATURES[] = {
+    {4, "network access control"},
+    {5, "ioctl on device files"},
+    {6, "IPC scopes"},
+    {7, "restrict-self log flags"},
+    {8, "restrict-self TSYNC"},
+    {9, "UNIX socket name resolution"},
+};
 
 enum caged_return {
   CAGED_OK = 0,
@@ -126,6 +150,7 @@ enum caged_return {
   CAGED_ERR_SECCOMP_NETLINK,
   CAGED_ERR_SECCOMP_UNIX,
   CAGED_ERR_SECCOMP_NETWORK,
+  CAGED_ERR_SECCOMP_SYSVIPC,
   CAGED_ERR_SECCOMP_LOAD,
 };
 
@@ -147,6 +172,7 @@ struct cmd_opts {
   int cap_bind;
   int allow_unix_sockets;
   int allow_network_sockets;
+  int allow_sysv_ipc;
   char **cmd;
   int help;
 };
@@ -355,10 +381,7 @@ static int deny_socket_families(scmp_filter_ctx ctx) {
       return -1;
     }
   }
-  /* Families numbered above this build's AF_MAX: a newer kernel may know
-     them.  seccomp runs before the kernel validates the argument, so this
-     also catches nonsense such as socket(-1, ...).
-  */
+  /* Families numbered above this build's AF_MAX are also blocked */
   r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
                              SCMP_A0(SCMP_CMP_GE, AF_MAX));
   if (r < 0) {
@@ -369,9 +392,7 @@ static int deny_socket_families(scmp_filter_ctx ctx) {
 }
 
 /* Blocks the use of AF_INET and AF_INET6 SOCK_RAW as this could be used to
-   manually craft packets that could bypass the landlock rules.  Both the
-   family and the type are compared: SOCK_RAW alone would also match
-   AF_NETLINK, which glibc needs (if_nameindex), so AF_NETLINK must survive.
+   manually craft packets that could bypass the landlock rules.
 */
 static int deny_inet_raw(scmp_filter_ctx ctx) {
   int r;
@@ -396,8 +417,7 @@ static int deny_inet_raw(scmp_filter_ctx ctx) {
 }
 
 /* Blocks the use of AF_NETLINK NETLINK_USERSOCK as this protocol is
-   used to IPC.  The family is compared too: protocol 2 is also
-   IPPROTO_IGMP, so a lone A2 comparison would break raw IGMP.
+   used to IPC.
 */
 static int deny_netlink_usersock(scmp_filter_ctx ctx) {
   int r;
@@ -450,13 +470,32 @@ static int deny_network_sockets(scmp_filter_ctx ctx) {
   return 0;
 }
 
+/* Blocks the system V ipc calls */
+static int deny_sysv_ipc(scmp_filter_ctx ctx) {
+  size_t n = sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0];
+
+  for (size_t k = 0; k < n; k++) {
+    int nr = seccomp_syscall_resolve_name(SYSV_IPC_SYSCALLS[k]);
+    if (nr == __NR_SCMP_ERROR) {
+      /* If libseccomp cannot resolve an ipc name, we simply return an error. */
+      seccomp_detail = -ENOSYS;
+      return -1;
+    }
+    int r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(ENOSYS), nr, 0);
+    if (r < 0) {
+      seccomp_detail = r;
+      return -1;
+    }
+  }
+  return 0;
+}
+
 /*
-  Builds and installs the seccomp filter.  Must run after restrict_self: the
-  no_new_privs flag it sets is what lets seccomp_load work unprivileged.
-  Returns CAGED_OK on success, or the code of the step that failed.
+  Builds and loads the seccomp filter.
 */
 static enum caged_return apply_seccomp(int allow_unix_sockets,
-                                       int allow_network_sockets) {
+                                       int allow_network_sockets,
+                                       int allow_sysv_ipc) {
   scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
 
   seccomp_detail = 0;
@@ -483,6 +522,10 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
   if (!allow_network_sockets && deny_network_sockets(ctx) < 0) {
     seccomp_release(ctx);
     return CAGED_ERR_SECCOMP_NETWORK;
+  }
+  if (!allow_sysv_ipc && deny_sysv_ipc(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_SYSVIPC;
   }
   if (seccomp_load(ctx) < 0) {
     seccomp_release(ctx);
@@ -522,6 +565,8 @@ static const char *caged_strreturn(enum caged_return r) {
     return "error denying unix sockets";
   case CAGED_ERR_SECCOMP_NETWORK:
     return "error denying network sockets";
+  case CAGED_ERR_SECCOMP_SYSVIPC:
+    return "error denying sysv ipc";
   case CAGED_ERR_SECCOMP_LOAD:
     return "error loading seccomp filter";
   }
@@ -573,27 +618,13 @@ static void print_help(FILE *out) {
       "(ABI >= 8)\n"
       "  --allow-unix-sockets           allow AF_UNIX sockets (IPC)\n"
       "  --allow-network-sockets        allow AF_INET, AF_INET6, AF_NETLINK\n"
+      "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"
       "  -h, --help                     show this help and exit\n"
       "\n"
       "Environment:\n"
       "  CAGED_DISABLE_WARNINGS=1       silence kernel ABI compatibility "
       "warnings\n");
 }
-
-/* A feature implemented by caged and the Landlock ABI that introduced it. */
-struct feature {
-  long min_abi;
-  const char *name;
-};
-
-static const struct feature FEATURES[] = {
-    {4, "network access control"},
-    {5, "ioctl on device files"},
-    {6, "IPC scopes"},
-    {7, "restrict-self log flags"},
-    {8, "restrict-self TSYNC"},
-    {9, "UNIX socket name resolution"},
-};
 
 /*
   Warns on stderr about every feature the running kernel cannot support
@@ -724,6 +755,9 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
     } else if (strcmp(argv[i], "--allow-network-sockets") == 0) {
       opts->allow_network_sockets = 1;
       i += 1;
+    } else if (strcmp(argv[i], "--allow-sysv-ipc") == 0) {
+      opts->allow_sysv_ipc = 1;
+      i += 1;
     } else if (strcmp(argv[i], "--allow-connect-tcp") == 0) {
       if (opts->n_connect > 0) {
         return fatal("--allow-connect-tcp conflicts with --allow-connect-port");
@@ -833,7 +867,8 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
     return CAGED_ERR_RESTRICT_SELF;
   }
   close(ruleset);
-  return apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets);
+  return apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets,
+                       opts->allow_sysv_ipc);
 }
 
 /* GCOV_EXCL_START */

@@ -63,6 +63,7 @@ static void build_and_export(int with_unix, int with_network, char *buf,
   if (with_network) {
     assert(deny_network_sockets(ctx) == 0);
   }
+  assert(deny_sysv_ipc(ctx) == 0);
   export_pfc(ctx, buf, size);
   seccomp_release(ctx);
 }
@@ -136,10 +137,27 @@ void test_allow_network_sockets(void) {
   assert(strstr(buf, "$a2.lo32 == 2)") != NULL);
 }
 
+/* Checks if every System V IPC entry point is denied */
+void test_sysv_ipc_denied(void) {
+  static const char *names[] = {
+      "msgget",     "msgsnd", "msgrcv", "msgctl", "semget", "semop",
+      "semtimedop", "semctl", "shmget", "shmat",  "shmdt",  "shmctl",
+  };
+  char buf[131072];
+  char needle[96];
+
+  build_and_export(1, 1, buf, sizeof buf);
+  for (size_t k = 0; k < sizeof names / sizeof names[0]; k++) {
+    snprintf(needle, sizeof needle, "# filter for syscall \"%s\" (", names[k]);
+    assert(strstr(buf, needle) != NULL);
+  }
+}
+
 int main(void) {
   test_default_seccomp_filter();
   test_allow_unix_sockets();
   test_allow_network_sockets();
+  test_sysv_ipc_denied();
 
   printf("OK\n");
   return 0;

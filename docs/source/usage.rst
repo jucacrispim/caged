@@ -119,6 +119,28 @@ must be released explicitly.
    across ``execve`` and cannot be removed. Like Landlock, it does not revoke
    file descriptors that are already open.
 
+System V IPC
+~~~~~~~~~~~~
+
+System V IPC objects (shared memory, message queues and semaphores) have no
+name Landlock could govern: no path, no port, no scope. They are therefore
+denied by seccomp, which fails every entry point with ``ENOSYS`` — the callers
+then take their "this kernel has no SysV IPC" fallback instead of failing hard.
+
+The denied syscalls are ``msgget``, ``msgsnd``, ``msgrcv``, ``msgctl``,
+``semget``, ``semop``, ``semtimedop``, ``semctl``, ``shmget``, ``shmat``,
+``shmdt`` and ``shmctl``.
+
+``--allow-sysv-ipc``
+    Allow System V IPC. Without it, every call above fails with ``ENOSYS``.
+
+.. note::
+
+   POSIX IPC (``shm_open``, ``mq_open`` and ``sem_open``) is a different
+   mechanism: it is backed by files under ``/dev/shm`` and ``/dev/mqueue``, so
+   it is governed by the filesystem rules (``--ro`` / ``--rw``) rather than by
+   this filter.
+
 Logging
 ~~~~~~~
 
