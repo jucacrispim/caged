@@ -29,6 +29,9 @@ caged [OPTIONS] -- CMD [ARGS...]
 - **Limits and descriptors**: core dumps are disabled and inherited file
   descriptors above stderr are closed before the command runs; `--max-procs
   N` caps `RLIMIT_NPROC`.
+- **Dangerous syscalls**: `ptrace`, `process_vm_*`, `pidfd_getfd`, `kcmp`,
+  `keyctl`/`add_key`/`request_key`, `io_uring_setup`, `bpf`,
+  `perf_event_open` and `userfaultfd` always fail with `ENOSYS`.
 - **Socket families**: every family except `AF_INET`, `AF_INET6` and
   `AF_NETLINK` is denied, including `AF_UNIX`; release them with
   `--allow-network-sockets` / `--allow-unix-sockets`. Raw sockets

@@ -141,6 +141,43 @@ The denied syscalls are ``msgget``, ``msgsnd``, ``msgrcv``, ``msgctl``,
    it is governed by the filesystem rules (``--ro`` / ``--rw``) rather than by
    this filter.
 
+Dangerous syscalls
+~~~~~~~~~~~~~~~~~~
+
+Some syscalls hand a process authority over other processes, over the caller's
+own keyrings, or over the kernel itself. None of them has a Landlock right, so
+seccomp denies them unconditionally with ``ENOSYS`` — again the "this kernel
+does not implement it" error, which makes libraries fall back instead of
+failing hard.
+
+``ptrace``, ``process_vm_readv``, ``process_vm_writev``, ``pidfd_getfd``,
+``process_madvise``, ``kcmp``
+    Reading or writing another process's memory, or stealing one of its file
+    descriptors, needs **only the same uid** (subject to Yama). Nothing in
+    Landlock covers it, and a descriptor stolen from a process outside the
+    sandbox bypasses the whole policy.
+
+``keyctl``, ``add_key``, ``request_key``
+    The kernel keyring is indexed by uid, so a confined process can read the
+    keys of the same user.
+
+``bpf``, ``perf_event_open``, ``userfaultfd``
+    Kernel attack surface. They need a capability or a relaxed sysctl today,
+    but denying them costs nothing and survives a sysctl change.
+
+``io_uring_setup``
+    The important one. An io_uring ring submits operations through shared
+    memory, executed by ``io_uring_enter``; the operations themselves
+    (``IORING_OP_SOCKET``, ``IORING_OP_CONNECT``, …) are never syscalls, so
+    they would side-step every socket family rule. Denying the setup call
+    makes ``liburing`` fall back to normal synchronous I/O, which works fine.
+
+.. note::
+
+   There is no option to release these. The practical cost is that ``gdb``,
+   ``strace`` and LeakSanitizer do not work *inside* the sandbox; debug from
+   outside instead.
+
 Logging
 ~~~~~~~
 

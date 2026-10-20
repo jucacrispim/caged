@@ -404,6 +404,42 @@ test_max_procs_set() {
   check "--max-procs is applied" 32 "$out"
 }
 
+# ptrace/io_uring need the same uid or no privilege at all, so seccomp is the
+# layer that has to stop them. Both answer ENOSYS, the "not implemented"
+# error, and the helpers below print "<ret> <errno>".
+test_ptrace_is_denied() {
+  out=$($CAGED $RO_PY -- python3 -c "
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.ptrace.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
+                        ctypes.c_void_p]
+libc.ptrace.restype = ctypes.c_long
+r = libc.ptrace(0, 0, None, None)
+print(r, ctypes.get_errno())
+" 2>/dev/null)
+  check "ptrace denied with ENOSYS" "-1 38" "$out"
+}
+
+# 425 is io_uring_setup on every architecture with unified numbering
+test_io_uring_is_denied() {
+  out=$($CAGED $RO_PY -- python3 -c "
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+params = ctypes.create_string_buffer(120)
+r = libc.syscall(425, 2, params)
+print(r, ctypes.get_errno())
+" 2>/dev/null)
+  check "io_uring_setup denied with ENOSYS" "-1 38" "$out"
+}
+
+# the filter is a denylist of syscalls, not a "deny everything": ordinary
+# syscalls still work
+test_ordinary_syscalls_still_work() {
+  out=$($CAGED $RO_PY -- python3 -c "import os; print(os.getpid() > 0)" 2>/dev/null)
+  check "ordinary syscalls still work" True "$out"
+}
+
 # restrict-self flags ar for abi >= 7. On my system it is abi 6, so what I
 # test here is that the flags don't break the caged run. Warnings will show
 # the user what is not enabled due to kernel version.
@@ -491,6 +527,10 @@ main() {
   test_inherited_fd_is_closed
   test_core_dump_disabled
   test_max_procs_set
+
+  test_ptrace_is_denied
+  test_io_uring_is_denied
+  test_ordinary_syscalls_still_work
 
   test_restrict_flags_accepted
 

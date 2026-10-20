@@ -64,6 +64,7 @@ static void build_and_export(int with_unix, int with_network, char *buf,
     assert(deny_network_sockets(ctx) == 0);
   }
   assert(deny_sysv_ipc(ctx) == 0);
+  assert(deny_dangerous_syscalls(ctx) == 0);
   export_pfc(ctx, buf, size);
   seccomp_release(ctx);
 }
@@ -153,11 +154,39 @@ void test_sysv_ipc_denied(void) {
   }
 }
 
+/* Every dangerous syscall from the table has a rule of its own, and it is
+   ENOSYS so callers take their "not implemented" fallback. */
+void test_dangerous_syscalls_denied(void) {
+  static const char *names[] = {
+      "ptrace",      "process_vm_readv", "process_vm_writev", "pidfd_getfd",
+      "process_madvise", "kcmp",         "keyctl",            "add_key",
+      "request_key", "io_uring_setup",   "bpf",               "perf_event_open",
+      "userfaultfd",
+  };
+  char buf[262144];
+  char needle[96];
+  const char *p;
+
+  build_and_export(1, 1, buf, sizeof buf);
+  for (size_t k = 0; k < sizeof names / sizeof names[0]; k++) {
+    snprintf(needle, sizeof needle, "# filter for syscall \"%s\" (", names[k]);
+    assert(strstr(buf, needle) != NULL);
+  }
+
+  /* io_uring_setup is the bypass this table exists for: its rule must be an
+     action, not a nested comparison. */
+  p = strstr(buf, "# filter for syscall \"io_uring_setup\" (");
+  assert(p != NULL);
+  p = strstr(p, "action ERRNO(38);");
+  assert(p != NULL);
+}
+
 int main(void) {
   test_default_seccomp_filter();
   test_allow_unix_sockets();
   test_allow_network_sockets();
   test_sysv_ipc_denied();
+  test_dangerous_syscalls_denied();
 
   printf("OK\n");
   return 0;

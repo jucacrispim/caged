@@ -75,6 +75,9 @@ Main and the testable core
        if (seccomp_failed_family >= 0) {
          fprintf(stderr, "caged: socket family %d\n", seccomp_failed_family);
        }
+       if (seccomp_failed_syscall != NULL) {
+         fprintf(stderr, "caged: syscall %s\n", seccomp_failed_syscall);
+       }
        die(caged_strreturn(r));
      }
 
@@ -114,6 +117,7 @@ to whatever it wants:
      CAGED_ERR_SECCOMP_UNIX,
      CAGED_ERR_SECCOMP_NETWORK,
      CAGED_ERR_SECCOMP_SYSVIPC,
+     CAGED_ERR_SECCOMP_SYSCALLS,
      CAGED_ERR_SECCOMP_LOAD,
    };
 
@@ -197,7 +201,7 @@ a `libseccomp <https://github.com/seccomp/libseccomp>`_ filter, built and
 installed by ``apply_seccomp``.
 
 The default action is ``SCMP_ACT_ALLOW`` and every rule denies, so the filter
-is an allowlist of address families, not of syscalls. Six helpers build it,
+is an allowlist of address families, not of syscalls. Seven helpers build it,
 one per concern:
 
 ``deny_socket_families``
@@ -235,20 +239,36 @@ one per concern:
     ``semget``/``semop``/``semtimedop``/``semctl`` and
     ``shmget``/``shmat``/``shmdt``/``shmctl``. The action is
     ``SCMP_ACT_ERRNO(ENOSYS)`` rather than ``EACCES``, so a caller takes its
-    "this kernel has no SysV IPC" fallback instead of failing hard. The names
-    go through ``seccomp_syscall_resolve_name``; a name the library cannot
-    resolve fails **closed** (``seccomp_detail = -ENOSYS``) instead of
-    installing a filter with a hole in it. Added only when
-    ``--allow-sysv-ipc`` is absent. The loop over the table keeps this at one
-    branch in ``caged.c`` rather than twelve.
+    "this kernel has no SysV IPC" fallback instead of failing hard. Added only
+    when ``--allow-sysv-ipc`` is absent.
+
+``deny_dangerous_syscalls``
+    The ``DENY_SYSCALLS`` table, unconditional. Three groups: the
+    process-inspection calls that only need the same uid (``ptrace``,
+    ``process_vm_readv``/``process_vm_writev``, ``pidfd_getfd``,
+    ``process_madvise``, ``kcmp``); the keyring calls that reach the caller's
+    own keys (``keyctl``, ``add_key``, ``request_key``); and the kernel attack
+    surface (``bpf``, ``perf_event_open``, ``userfaultfd``). Plus
+    ``io_uring_setup``, the one that matters most: a ring's operations are
+    submitted through shared memory and executed by ``io_uring_enter``, so
+    ``IORING_OP_SOCKET``/``IORING_OP_CONNECT`` never appear as syscalls and
+    would side-step every socket family rule above.
+
+Both of them delegate to ``deny_syscall_list``, which resolves each name with
+``seccomp_syscall_resolve_name`` and adds a zero-argument
+``SCMP_ACT_ERRNO(ENOSYS)`` rule. A name the library cannot resolve fails
+**closed** (``seccomp_detail = -ENOSYS``) instead of installing a filter with a
+hole in it. Driving by table keeps each list at one branch in ``caged.c``
+instead of one per name.
 
 Each helper returns ``-1`` on a libseccomp failure, keeping the raw code in
-``seccomp_detail`` and, in the family loop, the offending family in
-``seccomp_failed_family``. ``apply_seccomp`` maps the failing step to its own
-``enum caged_return`` code, and ``main`` turns ``seccomp_detail`` back into
-``errno`` so ``die`` prints a real message. That pair of globals is the one
-piece of hidden state in the program; it exists because libseccomp returns
-``-EINVAL``, ``-EPERM``-style codes instead of ``-1`` plus ``errno``.
+``seccomp_detail``, the offending family in ``seccomp_failed_family`` and the
+offending name in ``seccomp_failed_syscall``. ``apply_seccomp`` maps the failing
+step to its own ``enum caged_return`` code, and ``main`` turns
+``seccomp_detail`` back into ``errno`` so ``die`` prints a real message. Those
+globals are the one piece of hidden state in the program; they exist because
+libseccomp returns ``-EINVAL``, ``-EPERM``-style codes instead of ``-1`` plus
+``errno``.
 
 Two properties make the filter fit here: it is installed **after**
 ``restrict_self`` (no need to pre-declare the syscalls the setup makes, and

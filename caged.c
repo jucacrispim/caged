@@ -104,12 +104,14 @@
    LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
 
 /*
-  `seccomp_detail` holds the error returned by libseccomp  and
+  `seccomp_detail` holds the error returned by libseccomp,
   `seccomp_failed_family` holds the socket family that a rule could not
-  be added. They exist so the caller know which error happend.
+  be added and `seccomp_failed_syscall` holds the syscall name that a rule
+  could not be added for. They exist so the caller know which error happend.
 */
 static int seccomp_detail;
 static int seccomp_failed_family = -1;
+static const char *seccomp_failed_syscall;
 
 /*
   System V IPC syscalls are blocked. They will return ENOSYS
@@ -118,6 +120,28 @@ static const char *SYSV_IPC_SYSCALLS[] = {
     "msgget",     "msgsnd", "msgrcv", "msgctl", "semget", "semop",
     "semtimedop", "semctl", "shmget", "shmat",  "shmdt",  "shmctl",
 };
+
+/*
+  Syscalls that act on other processes or use shared memory are blocked
+*/
+static const char *DENY_SYSCALLS[] = {
+    "ptrace",
+    "process_vm_readv",
+    "process_vm_writev",
+    "pidfd_getfd",
+    "process_madvise",
+    "kcmp",
+    "keyctl",
+    "add_key",
+    "request_key",
+    "io_uring_setup",
+    "bpf",
+    "perf_event_open",
+    "userfaultfd",
+};
+
+#define SYSV_IPC_N (sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0])
+#define DENY_SYSCALLS_N (sizeof DENY_SYSCALLS / sizeof DENY_SYSCALLS[0])
 
 /* These feature stuff are used by the warning messages about
    landlock features not supported by the hosts ABI
@@ -154,6 +178,7 @@ enum caged_return {
   CAGED_ERR_SECCOMP_UNIX,
   CAGED_ERR_SECCOMP_NETWORK,
   CAGED_ERR_SECCOMP_SYSVIPC,
+  CAGED_ERR_SECCOMP_SYSCALLS,
   CAGED_ERR_SECCOMP_LOAD,
 };
 
@@ -498,24 +523,37 @@ static int deny_network_sockets(scmp_filter_ctx ctx) {
   return 0;
 }
 
-/* Blocks the system V ipc calls */
-static int deny_sysv_ipc(scmp_filter_ctx ctx) {
-  size_t n = sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0];
-
+/*
+  Denies each named syscall with ENOSYS. A name libseccomp cannot resolve
+  returns an error.
+*/
+static int deny_syscall_list(scmp_filter_ctx ctx, const char *const *names,
+                             size_t n) {
   for (size_t k = 0; k < n; k++) {
-    int nr = seccomp_syscall_resolve_name(SYSV_IPC_SYSCALLS[k]);
+    int nr = seccomp_syscall_resolve_name(names[k]);
     if (nr == __NR_SCMP_ERROR) {
-      /* If libseccomp cannot resolve an ipc name, we simply return an error. */
       seccomp_detail = -ENOSYS;
+      seccomp_failed_syscall = names[k];
       return -1;
     }
     int r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(ENOSYS), nr, 0);
     if (r < 0) {
       seccomp_detail = r;
+      seccomp_failed_syscall = names[k];
       return -1;
     }
   }
   return 0;
+}
+
+/* Blocks the system V ipc calls */
+static int deny_sysv_ipc(scmp_filter_ctx ctx) {
+  return deny_syscall_list(ctx, SYSV_IPC_SYSCALLS, SYSV_IPC_N);
+}
+
+/* Blocks the syscalls that escape the sandbox or attack the kernel */
+static int deny_dangerous_syscalls(scmp_filter_ctx ctx) {
+  return deny_syscall_list(ctx, DENY_SYSCALLS, DENY_SYSCALLS_N);
 }
 
 /*
@@ -528,6 +566,7 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
 
   seccomp_detail = 0;
   seccomp_failed_family = -1;
+  seccomp_failed_syscall = NULL;
   if (ctx == NULL) {
     return CAGED_ERR_SECCOMP_INIT;
   }
@@ -554,6 +593,10 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
   if (!allow_sysv_ipc && deny_sysv_ipc(ctx) < 0) {
     seccomp_release(ctx);
     return CAGED_ERR_SECCOMP_SYSVIPC;
+  }
+  if (deny_dangerous_syscalls(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_SYSCALLS;
   }
   if (seccomp_load(ctx) < 0) {
     seccomp_release(ctx);
@@ -599,6 +642,8 @@ static const char *caged_strreturn(enum caged_return r) {
     return "error denying network sockets";
   case CAGED_ERR_SECCOMP_SYSVIPC:
     return "error denying sysv ipc";
+  case CAGED_ERR_SECCOMP_SYSCALLS:
+    return "error denying dangerous syscalls";
   case CAGED_ERR_SECCOMP_LOAD:
     return "error loading seccomp filter";
   }
@@ -961,6 +1006,9 @@ int main(int argc, char *argv[]) {
     }
     if (seccomp_failed_family >= 0) {
       fprintf(stderr, "caged: socket family %d\n", seccomp_failed_family);
+    }
+    if (seccomp_failed_syscall != NULL) {
+      fprintf(stderr, "caged: syscall %s\n", seccomp_failed_syscall);
     }
     die(caged_strreturn(r));
   }
