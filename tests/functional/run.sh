@@ -20,8 +20,17 @@ fi
 
 # minimal read perms needed to run basic shell commands
 RO="--ro /usr --ro /bin --ro /lib"
-# extra trees needed to run python3 (dynamic loader, locale, ...)
-RO_PY="$RO --ro /lib64 --ro /etc"
+
+# Several tests use python3 (sockets, ctypes). Its prefix is not always /usr:
+# pyenv and venvs keep the interpreter elsewhere, and then it cannot even
+# start inside the cage. Derive the granted trees from the interpreter itself
+# instead of assuming /usr. PYTHON may be set from outside to pick another one.
+PYTHON=${PYTHON:-$(command -v python3 2>/dev/null || true)}
+PY_REAL=$(readlink -f "$PYTHON" 2>/dev/null || printf '%s' "$PYTHON")
+PY_PREFIX=$(dirname "$(dirname "$PY_REAL")")
+# extra trees: dynamic loader, locale, and the interpreter's own two levels
+# (a pyenv shim needs both the shim dir and the real prefix)
+RO_PY="$RO --ro /lib64 --ro /etc --ro $PY_PREFIX --ro $(dirname "$PYTHON")"
 
 pass=0
 fail=0
@@ -37,6 +46,29 @@ check() {
 # check_ne NAME NOT_EXPECTED ACTUAL
 check_ne() {
   if [ "$2" != "$3" ]; then ok "$1"; else bad "$1 (should not be '$2')"; fi
+}
+
+# A python3 that cannot start inside the cage makes a whole batch of tests
+# fail for one reason, so say it up front instead of leaving bare mismatches.
+if [ -z "$PYTHON" ] ||
+   ! $CAGED $RO_PY -- "$PYTHON" -c 'pass' >/dev/null 2>&1; then
+  printf 'WARN - python3 (%s) does not run inside the cage; the python-based\n' \
+    "${PYTHON:-not found}" >&2
+  printf '       tests will fail. Set PYTHON=/path/to/python3 to override.\n' >&2
+fi
+
+# Creates a socket from inside the cage and prints "created" or the errno of
+# the failure. $1 = extra caged flags, $2 = python expression creating it.
+socket_probe() {
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $1 -- "$PYTHON" -c "
+import socket
+try:
+    $2
+except OSError as e:
+    print(e.errno)
+else:
+    print('created')
+" 2>&1
 }
 
 work=$(mktemp -d)
@@ -208,7 +240,7 @@ test_scope_signal_allowed_with_flag() {
 # connecting to an abstract unix socket outside the sandbox is denied unless
 # the abstract unix scope is allowed with --allow-scoped-abstract-unix
 start_abs_server() {
-  python3 -c "
+  "$PYTHON" -c "
 import socket, time
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.bind('\0$1')
@@ -222,7 +254,7 @@ test_scope_abstract_unix_denied_by_default() {
   name="caged-abs-$$-dd"
   srv=$(start_abs_server "$name")
   sleep 1
-  $CAGED $RO_PY -- python3 -c "
+  $CAGED $RO_PY -- "$PYTHON" -c "
 import socket, sys
 try:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -243,7 +275,7 @@ test_scope_abstract_unix_allowed_with_flag() {
   name="caged-abs-$$-ok"
   srv=$(start_abs_server "$name")
   sleep 1
-  $CAGED $RO_PY --allow-unix-sockets --allow-scoped-abstract-unix -- python3 -c "
+  $CAGED $RO_PY --allow-unix-sockets --allow-scoped-abstract-unix -- "$PYTHON" -c "
 import socket, sys
 try:
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -263,7 +295,7 @@ sys.exit(0)
 # used for the NET access tests
 start_tcp_server() {
   portfile=$(mktemp)
-  python3 -c "
+  "$PYTHON" -c "
 import socket, time
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -294,7 +326,7 @@ stop_tcp_server() {
 # connects from inside the sandbox; $1 = net flags (may be empty), $2 = port
 # exit 3 = PermissionError (denied), exit 4 = other error, exit 0 = connected
 tcp_connect_rc() {
-  $CAGED $RO_PY $1 -- python3 -c "
+  $CAGED $RO_PY $1 -- "$PYTHON" -c "
 import socket, sys
 try:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -310,7 +342,7 @@ sys.exit(0)
 # binds to an ephemeral port from inside the sandbox; $1 = net flags
 # exit 3 = PermissionError (denied), exit 4 = other error, exit 0 = bound
 tcp_bind_rc() {
-  $CAGED $RO_PY $1 -- python3 -c "
+  $CAGED $RO_PY $1 -- "$PYTHON" -c "
 import socket, sys
 try:
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -365,6 +397,91 @@ test_net_bind_allowed_general() {
   check "tcp bind allowed with --allow-bind-tcp" 0 "$rc"
 }
 
+# Socket families: these exercise the seccomp filter against the real kernel,
+# not just its pseudo code. The expected errno is 13 (EACCES) throughout. That
+# matters: outside the cage SOCK_RAW and AF_PACKET fail with EPERM (1), so a
+# 13 here can only come from the filter.
+
+# AF_PACKET is outside the family allowlist, so it is denied either way
+test_af_packet_is_denied() {
+  out=$(socket_probe "" "socket.socket(socket.AF_PACKET, socket.SOCK_RAW)")
+  check "AF_PACKET is denied" 13 "$out"
+  out=$(socket_probe "--allow-network-sockets --allow-unix-sockets" \
+        "socket.socket(socket.AF_PACKET, socket.SOCK_RAW)")
+  check "AF_PACKET stays denied with every family allowed" 13 "$out"
+}
+
+# the raw rule is only observable once the family itself is released
+test_sock_raw_is_denied() {
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_INET, socket.SOCK_RAW)")
+  check "SOCK_RAW is denied even with --allow-network-sockets" 13 "$out"
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_INET6, socket.SOCK_RAW)")
+  check "AF_INET6 SOCK_RAW is denied" 13 "$out"
+  # control: a non-raw socket in the same family is created
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_INET, socket.SOCK_STREAM)")
+  check "TCP socket is created once the family is allowed" created "$out"
+}
+
+# SOCK_CLOEXEC lives in the high bits of the type argument, so a plain
+# equality check would let it through; the mask is what makes this pass
+test_sock_raw_cloexec_is_denied() {
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_INET, socket.SOCK_RAW | socket.SOCK_CLOEXEC)")
+  check "SOCK_RAW|SOCK_CLOEXEC is denied" 13 "$out"
+}
+
+# UDP is denied by the family rule, not by the Landlock port rules (which only
+# govern TCP)
+test_udp_socket_is_denied() {
+  out=$(socket_probe "" "socket.socket(socket.AF_INET, socket.SOCK_DGRAM)")
+  check "UDP is denied by default" 13 "$out"
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_INET, socket.SOCK_DGRAM)")
+  check "UDP is created with --allow-network-sockets" created "$out"
+}
+
+# NETLINK_USERSOCK is an IPC channel and is always denied; other netlink
+# protocols must survive, or getifaddrs()/if_nameindex() break
+test_netlink_usersock_is_denied() {
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 2)")
+  check "NETLINK_USERSOCK is denied" 13 "$out"
+  out=$(socket_probe "--allow-network-sockets" \
+        "socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 0)")
+  check "NETLINK_ROUTE is still created" created "$out"
+}
+
+test_unix_socket_is_denied() {
+  out=$(socket_probe "" "socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)")
+  check "AF_UNIX is denied by default" 13 "$out"
+  out=$(socket_probe "--allow-unix-sockets" \
+        "socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)")
+  check "AF_UNIX is created with --allow-unix-sockets" created "$out"
+}
+
+# the catch-all rule: a family number above this build's AF_MAX fails with
+# EACCES, not with the kernel's EAFNOSUPPORT (97)
+test_family_above_af_max_is_denied() {
+  out=$(socket_probe "--allow-network-sockets --allow-unix-sockets" \
+        "socket.socket(999, socket.SOCK_STREAM)")
+  check "family above AF_MAX is denied" 13 "$out"
+}
+
+# the practical claim from RISKS.md: the daemon outside the cage is not
+# reachable from inside it
+test_docker_sock_is_unreachable() {
+  if [ ! -S /run/docker.sock ]; then
+    ok "docker.sock is unreachable (skipped: no /run/docker.sock)"
+    return
+  fi
+  out=$(socket_probe "" \
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('/run/docker.sock')")
+  check "docker.sock is unreachable from the cage" 13 "$out"
+}
+
 test_sysv_ipc_denied() {
   $CAGED $RO -- ipcmk -M 1024 >/dev/null 2>&1
   check_ne "sysv IPC denied by default" 0 $?
@@ -399,7 +516,7 @@ test_core_dump_disabled() {
 
 # --max-procs is passed through as RLIMIT_NPROC (dash has no `ulimit -u`)
 test_max_procs_set() {
-  out=$($CAGED $RO_PY --max-procs 32 -- python3 -c \
+  out=$($CAGED $RO_PY --max-procs 32 -- "$PYTHON" -c \
         'import resource; print(resource.getrlimit(resource.RLIMIT_NPROC)[0])' 2>/dev/null)
   check "--max-procs is applied" 32 "$out"
 }
@@ -408,7 +525,7 @@ test_max_procs_set() {
 # layer that has to stop them. Both answer ENOSYS, the "not implemented"
 # error, and the helpers below print "<ret> <errno>".
 test_ptrace_is_denied() {
-  out=$($CAGED $RO_PY -- python3 -c "
+  out=$($CAGED $RO_PY -- "$PYTHON" -c "
 import ctypes
 libc = ctypes.CDLL(None, use_errno=True)
 libc.ptrace.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
@@ -422,7 +539,7 @@ print(r, ctypes.get_errno())
 
 # 425 is io_uring_setup on every architecture with unified numbering
 test_io_uring_is_denied() {
-  out=$($CAGED $RO_PY -- python3 -c "
+  out=$($CAGED $RO_PY -- "$PYTHON" -c "
 import ctypes
 libc = ctypes.CDLL(None, use_errno=True)
 libc.syscall.restype = ctypes.c_long
@@ -436,7 +553,7 @@ print(r, ctypes.get_errno())
 # the filter is a denylist of syscalls, not a "deny everything": ordinary
 # syscalls still work
 test_ordinary_syscalls_still_work() {
-  out=$($CAGED $RO_PY -- python3 -c "import os; print(os.getpid() > 0)" 2>/dev/null)
+  out=$($CAGED $RO_PY -- "$PYTHON" -c "import os; print(os.getpid() > 0)" 2>/dev/null)
   check "ordinary syscalls still work" True "$out"
 }
 
@@ -520,6 +637,15 @@ main() {
   test_net_bind_denied_by_default
   test_net_bind_allowed_by_port
   test_net_bind_allowed_general
+
+  test_af_packet_is_denied
+  test_sock_raw_is_denied
+  test_sock_raw_cloexec_is_denied
+  test_udp_socket_is_denied
+  test_netlink_usersock_is_denied
+  test_unix_socket_is_denied
+  test_family_above_af_max_is_denied
+  test_docker_sock_is_unreachable
 
   test_sysv_ipc_denied
   test_sysv_ipc_allowed_with_flag
