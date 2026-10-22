@@ -622,6 +622,22 @@ test_warnings_disabled_by_env() {
   fi
 }
 
+# --require-abi turns the ABI warning into a hard failure: a floor the kernel
+# cannot meet must fail before the sandbox is built.
+test_require_abi_unmet_exits_1() {
+  err=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO --require-abi 99 -- true 2>&1 >/dev/null)
+  check "--require-abi above the kernel ABI exits 1" 1 $?
+  case "$err" in
+  *"Landlock ABI"*"required"*) ok "--require-abi reports both numbers" ;;
+  *) bad "--require-abi reports both numbers ('$err')" ;;
+  esac
+}
+
+test_require_abi_met_runs() {
+  $CAGED $RO --require-abi 1 -- true 2>/dev/null
+  check "--require-abi 1 is satisfied by any kernel" 0 $?
+}
+
 test_help_long() {
   out=$($CAGED --help 2>/dev/null)
   check "--help exits 0" 0 $?
@@ -703,6 +719,8 @@ main() {
   test_restrict_flags_accepted
 
   test_warnings_printed_by_default
+  test_require_abi_unmet_exits_1
+  test_require_abi_met_runs
   test_warnings_disabled_by_env
 
   test_help_long

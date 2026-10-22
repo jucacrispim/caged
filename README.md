@@ -32,6 +32,9 @@ caged [OPTIONS] -- CMD [ARGS...]
 - **Dangerous syscalls**: `ptrace`, `process_vm_*`, `pidfd_getfd`, `kcmp`,
   `keyctl`/`add_key`/`request_key`, `io_uring_setup`, `bpf`,
   `perf_event_open` and `userfaultfd` always fail with `ENOSYS`.
+- **ABI floor**: `--require-abi N` turns the "your kernel is older than this
+  feature" warning into a failure, so the policy is never silently weaker than
+  asked for.
 - **Environment**: cleared by default — only `PATH`, `HOME`, `LANG`,
   `LANGUAGE` and the `LC_*` categories are inherited. Use `--keep-env` for
   everything, or `--env NAME=VALUE` to set a single variable.

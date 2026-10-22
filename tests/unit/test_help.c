@@ -71,6 +71,7 @@ void test_print_help(void) {
   assert(strstr(buf, "--allow-network-sockets") != NULL);
   assert(strstr(buf, "--allow-sysv-ipc") != NULL);
   assert(strstr(buf, "--max-procs N") != NULL);
+  assert(strstr(buf, "--require-abi N") != NULL);
   assert(strstr(buf, "--keep-env") != NULL);
   assert(strstr(buf, "--env NAME=VALUE") != NULL);
   assert(strstr(buf, "--help") != NULL);

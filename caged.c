@@ -114,6 +114,12 @@ static int seccomp_failed_family = -1;
 static const char *seccomp_failed_syscall;
 
 /*
+  The Landlock ABI version on the host. It is kept so we can report what
+  the kernel offers against what --require-abi asked for.
+*/
+static long abi_found = -1;
+
+/*
   System V IPC syscalls are blocked. They will return ENOSYS
 */
 static const char *SYSV_IPC_SYSCALLS[] = {
@@ -188,6 +194,7 @@ static const struct feature FEATURES[] = {
 enum caged_return {
   CAGED_OK = 0,
   CAGED_ERR_NO_LANDLOCK,
+  CAGED_ERR_ABI_TOO_OLD,
   CAGED_ERR_CREATE_RULESET,
   CAGED_ERR_READ_ACCESS,
   CAGED_ERR_RW_ACCESS,
@@ -227,6 +234,7 @@ struct cmd_opts {
   int allow_network_sockets;
   int allow_sysv_ipc;
   long max_procs;
+  long require_abi;
   int keep_env;
   char **env;
   int n_env;
@@ -313,6 +321,15 @@ static int close_inherited_fds(void) { return close_range(3, ~0U, 0); }
 static long check_abi() {
   return syscall(SYS_landlock_create_ruleset, NULL, 0,
                  LANDLOCK_CREATE_RULESET_VERSION);
+}
+
+/*
+  True when the kernel's Landlock ABI meets the --require-abi floor. A floor
+  of 0 means "no requirement": caged then only warns about the features the
+  ABI lacks, which is the fail-open behaviour.
+*/
+static int abi_satisfies(long abi, long require) {
+  return require <= 0 || abi >= require;
 }
 
 /*
@@ -645,6 +662,8 @@ static const char *caged_strreturn(enum caged_return r) {
     return "ok";
   case CAGED_ERR_NO_LANDLOCK:
     return "Landlock not supported";
+  case CAGED_ERR_ABI_TOO_OLD:
+    return "Landlock ABI too old";
   case CAGED_ERR_CREATE_RULESET:
     return "error creating ruleset";
   case CAGED_ERR_READ_ACCESS:
@@ -731,6 +750,7 @@ static void print_help(FILE *out) {
       "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"
       "  --max-procs N                  set RLIMIT_NPROC to N (default: no "
       "limit)\n"
+      "  --require-abi N                fail unless Landlock ABI >= N\n"
       "  --keep-env                     keep the inherited environment\n"
       "  --env NAME=VALUE               set NAME in the command's "
       "environment\n"
@@ -978,6 +998,14 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
         return fatal("--max-procs must be a positive number");
       }
       i += 2;
+    } else if (strcmp(argv[i], "--require-abi") == 0) {
+      if (i + 1 >= argc) {
+        return fatal("--require-abi must have a value");
+      }
+      if (parse_positive(argv[i + 1], &opts->require_abi) < 0) {
+        return fatal("--require-abi must be a positive number");
+      }
+      i += 2;
     } else if (strcmp(argv[i], "--keep-env") == 0) {
       opts->keep_env = 1;
       i += 1;
@@ -1064,8 +1092,13 @@ static enum caged_return caged_setup(const struct cmd_opts *opts) {
     return CAGED_ERR_RLIMIT;
   }
   long abi = check_abi();
+  abi_found = abi;
   if (abi < 1) {
     return CAGED_ERR_NO_LANDLOCK;
+  }
+  if (!abi_satisfies(abi, opts->require_abi)) {
+    errno = ENOTSUP;
+    return CAGED_ERR_ABI_TOO_OLD;
   }
   warn_unsupported_features(abi);
   int handled = get_handled_access_fs(abi);
@@ -1141,6 +1174,10 @@ int main(int argc, char *argv[]) {
     }
     if (seccomp_failed_syscall != NULL) {
       fprintf(stderr, "caged: syscall %s\n", seccomp_failed_syscall);
+    }
+    if (r == CAGED_ERR_ABI_TOO_OLD) {
+      fprintf(stderr, "caged: Landlock ABI %ld, %ld required\n", abi_found,
+              opts.require_abi);
     }
     die(caged_strreturn(r));
   }

@@ -462,6 +462,55 @@ void test_allow_network_sockets(void) {
   cmd_opts_free(&opts);
 }
 
+/* --require-abi sets the ABI floor */
+void test_require_abi(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--require-abi", "9", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(opts.require_abi == 9);
+
+  cmd_opts_free(&opts);
+}
+
+void test_require_abi_missing_value(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--require-abi", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_require_abi_invalid(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--require-abi", "abc", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.require_abi == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* zero is not a floor; omit the option for "no requirement" */
+void test_require_abi_zero(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--require-abi", "0", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_require_abi_negative(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--require-abi", "-3", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
 /* --keep-env is a boolean and defaults off (the environment is cleared) */
 void test_keep_env(void) {
   struct cmd_opts opts = {0};
@@ -734,6 +783,11 @@ int main(void) {
   test_max_procs_negative();
   test_max_procs_trailing_garbage();
   test_max_procs_overflow();
+  test_require_abi();
+  test_require_abi_missing_value();
+  test_require_abi_invalid();
+  test_require_abi_zero();
+  test_require_abi_negative();
   test_keep_env();
   test_env_flag();
   test_env_flag_repeated();

@@ -226,6 +226,31 @@ cannot raise them back.
     the whole system, not per process tree, so ``N`` has to be larger than the
     number of processes the user already has.
 
+Landlock ABI
+~~~~~~~~~~~~
+
+By default a kernel whose Landlock ABI lacks a feature produces a **warning**
+on stderr and caged runs anyway, with whatever the ABI supports. That is
+deliberate (the sandbox still works) but it is fail-open: on an ABI 6 kernel
+you can believe you have ``RESOLVE_UNIX`` when the kernel is not enforcing it.
+
+``--require-abi N``
+    Refuse to run unless the kernel's Landlock ABI is at least ``N``. The check
+    happens right after the probe and before any ruleset is created, so nothing
+    is applied on failure. The error reports both numbers::
+
+        caged: Landlock ABI 6, 9 required
+        Landlock ABI too old: Operation not supported
+
+    Omit the option for no requirement. ``0`` is rejected as a value — it is
+    not a floor, and omitting the option already means "no requirement".
+
+.. tip::
+
+   ABI 4 adds TCP rules, 5 ``IOCTL_DEV``, 6 IPC scopes, 7 restrict-self log
+   flags, 8 ``TSYNC`` and 9 ``RESOLVE_UNIX``. ``--require-abi 9`` is the
+   setting that guarantees the whole policy is actually enforced.
+
 Command environment
 ~~~~~~~~~~~~~~~~~~~
 
@@ -276,9 +301,10 @@ Exit status
 
 - **0** — the command ran (``caged`` replaces itself with the command, so the
   exit status is the command's).
-- **1** — setup failed (Landlock unavailable, ruleset error, a path could not
-  be opened, a limit could not be set, the seccomp filter could not be
-  installed) or the command could not be executed.
+- **1** — setup failed (Landlock unavailable, the ABI is below
+  ``--require-abi``, ruleset error, a path could not be opened, a limit could
+  not be set, the seccomp filter could not be installed) or the command could
+  not be executed.
 - **2** — usage error (unknown option, missing value, conflicting options,
   missing ``-- cmd``, or run with no arguments, which prints the help on
   stderr).

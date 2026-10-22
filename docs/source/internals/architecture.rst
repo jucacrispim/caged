@@ -27,18 +27,22 @@ The setup is a one-way funnel:
    setup itself runs with them.
 2. **Probe the ABI** with ``check_abi()`` (``landlock_create_ruleset`` with
    ``attr == NULL`` and the version flag).
-3. **Compute the handled masks** for this ABI (``get_handled_access_fs``,
+3. **Enforce the ABI floor** (``abi_satisfies``): when ``--require-abi N`` was
+   given and the kernel reports a lower ABI, stop with
+   ``CAGED_ERR_ABI_TOO_OLD`` before any ruleset exists. Without the option the
+   floor is ``0`` and the step is a no-op, leaving only the warning.
+4. **Compute the handled masks** for this ABI (``get_handled_access_fs``,
    ``get_handled_access_net``, ``get_supported_scopes``) and fill
    ``struct landlock_ruleset_attr``.
-4. **Create the ruleset** (``create_ruleset``).
-5. **Add rules** — one ``PATH_BENEATH`` rule per path, one ``NET_PORT`` rule
+5. **Create the ruleset** (``create_ruleset``).
+6. **Add rules** — one ``PATH_BENEATH`` rule per path, one ``NET_PORT`` rule
    per port.
-6. **Restrict self** (``restrict_self``): ``PR_SET_NO_NEW_PRIVS`` followed by
+7. **Restrict self** (``restrict_self``): ``PR_SET_NO_NEW_PRIVS`` followed by
    ``landlock_restrict_self`` with the requested flags.
-7. **Install the seccomp filter** (``apply_seccomp``): last among the policy
+8. **Install the seccomp filter** (``apply_seccomp``): last among the policy
    layers, so it does not have to model the syscalls the setup itself makes
    (``open``, ``fstat``, ``close``, ``prctl``, ``landlock_*``).
-8. **Close the inherited descriptors** (``close_inherited_fds``):
+9. **Close the inherited descriptors** (``close_inherited_fds``):
    ``close_range(3, ~0U, 0)``. Truly last, after every step that could still
    need to report an error — ``stderr`` is fd 2 and stays open.
 
@@ -78,6 +82,10 @@ Main and the testable core
        if (seccomp_failed_syscall != NULL) {
          fprintf(stderr, "caged: syscall %s\n", seccomp_failed_syscall);
        }
+       if (r == CAGED_ERR_ABI_TOO_OLD) {
+         fprintf(stderr, "caged: Landlock ABI %ld, %ld required\n", abi_found,
+                 opts.require_abi);
+       }
        die(caged_strreturn(r));
      }
 
@@ -108,6 +116,7 @@ to whatever it wants:
    enum caged_return {
      CAGED_OK = 0,
      CAGED_ERR_NO_LANDLOCK,
+     CAGED_ERR_ABI_TOO_OLD,
      CAGED_ERR_CREATE_RULESET,
      CAGED_ERR_READ_ACCESS,
      CAGED_ERR_RW_ACCESS,
@@ -152,6 +161,7 @@ so there is no fixed upper bound:
      int allow_network_sockets;
      int allow_sysv_ipc;
      long max_procs;
+     long require_abi;
      int keep_env;
      char **env;              int n_env;  int cap_env;
      char **cmd;

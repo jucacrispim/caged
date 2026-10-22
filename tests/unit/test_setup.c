@@ -219,6 +219,77 @@ void test_setup_no_landlock(void) {
   assert(fake.create_calls_count == 0);
 }
 
+/* --require-abi is satisfied when the kernel's ABI is at least the floor */
+void test_setup_require_abi_met(void) {
+  reset_fake();
+  fake.abi = 6;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.require_abi = 6;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(fake.create_calls_count == 1);
+  assert(abi_found == 6);
+}
+
+/* a kernel newer than the floor is fine too */
+void test_setup_require_abi_newer_kernel(void) {
+  reset_fake();
+  fake.abi = 9;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+  opts.require_abi = 9;
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(abi_found == 9);
+}
+
+/* an older kernel fails before any ruleset is built, and the error carries
+   errno so die() prints a real message */
+void test_setup_require_abi_too_old(void) {
+  reset_fake();
+  fake.abi = 6;
+
+  struct cmd_opts opts = {0};
+  opts.require_abi = 9;
+
+  errno = 0;
+  assert(caged_setup(&opts) == CAGED_ERR_ABI_TOO_OLD);
+  assert(errno == ENOTSUP);
+  assert(abi_found == 6);
+  assert(fake.create_calls_count == 0);
+  assert(fake.seccomp_rule_calls_count == 0);
+}
+
+/* no --require-abi means no requirement: even ABI 1 is accepted */
+void test_setup_require_abi_unset(void) {
+  reset_fake();
+  fake.abi = 1;
+  fake.create_ruleset_ret = 3;
+  fake.restrict_self_ret = 0;
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts) == CAGED_OK);
+  assert(abi_found == 1);
+}
+
+/* the probe reports no Landlock at all: that error wins over the floor */
+void test_setup_require_abi_no_landlock(void) {
+  reset_fake();
+  fake.abi = -1;
+
+  struct cmd_opts opts = {0};
+  opts.require_abi = 9;
+
+  assert(caged_setup(&opts) == CAGED_ERR_NO_LANDLOCK);
+  assert(abi_found == -1);
+}
+
 void test_setup_create_ruleset_error(void) {
   reset_fake();
   fake.abi = 6;
@@ -680,6 +751,7 @@ void test_strreturn(void) {
   enum caged_return codes[] = {
       CAGED_OK,
       CAGED_ERR_NO_LANDLOCK,
+      CAGED_ERR_ABI_TOO_OLD,
       CAGED_ERR_CREATE_RULESET,
       CAGED_ERR_READ_ACCESS,
       CAGED_ERR_RW_ACCESS,
@@ -814,6 +886,11 @@ int main(void) {
   test_setup_restrict_flags_unsupported_abi();
   test_setup_restrict_flags_abi_7();
   test_setup_no_landlock();
+  test_setup_require_abi_met();
+  test_setup_require_abi_newer_kernel();
+  test_setup_require_abi_too_old();
+  test_setup_require_abi_unset();
+  test_setup_require_abi_no_landlock();
   test_setup_create_ruleset_error();
   test_setup_allow_ro_error();
   test_setup_allow_rw_error();
