@@ -1,6 +1,93 @@
 Changelog
 =========
 
+v0.2.0
+------
+
+Second release. Adds a seccomp layer, hardening of the process itself and a
+fail-closed ABI floor.
+
+Seccomp layer
+~~~~~~~~~~~~~
+
+- New build dependency: libseccomp (``libseccomp-dev``), linked with
+  ``-lseccomp``. ``make`` fails early with an actionable message when
+  ``<seccomp.h>`` is missing.
+- Every socket family except ``AF_INET``, ``AF_INET6``, ``AF_NETLINK`` and
+  ``AF_UNIX`` is denied with ``EACCES``, including family numbers above this
+  build's ``AF_MAX`` — a newer kernel cannot open a family the filter does not
+  know about.
+- ``--allow-network-sockets`` and ``--allow-unix-sockets`` release
+  ``AF_INET``/``AF_INET6``/``AF_NETLINK`` and ``AF_UNIX``.
+- Raw sockets (``AF_INET``/``AF_INET6`` with ``SOCK_RAW``, compared through a
+  mask so ``SOCK_CLOEXEC`` does not slip through) and ``NETLINK_USERSOCK`` are
+  always denied.
+- System V IPC — the ``msg*``, ``sem*`` and ``shm*`` entries, twelve syscalls —
+  is denied with ``ENOSYS``; ``--allow-sysv-ipc`` releases it.
+- Dangerous syscalls are always denied with ``ENOSYS``: ``ptrace``,
+  ``process_vm_readv``, ``process_vm_writev``, ``pidfd_getfd``,
+  ``process_madvise``, ``kcmp``, ``keyctl``, ``add_key``, ``request_key``,
+  ``io_uring_setup``, ``bpf``, ``perf_event_open`` and ``userfaultfd``.
+  ``io_uring_setup`` closes the bypass where ``IORING_OP_SOCKET`` and
+  ``IORING_OP_CONNECT`` never appear as syscalls.
+- A failed rule names the offending socket family or syscall, and libseccomp's
+  negative return code is turned back into ``errno``.
+
+Process hardening
+~~~~~~~~~~~~~~~~~
+
+- Inherited file descriptors above stderr are closed
+  (``close_range(3, ~0U, 0)``) before the command runs: neither Landlock nor
+  seccomp can revoke a descriptor that already exists.
+- ``RLIMIT_CORE`` is set to 0, soft and hard, so a crash cannot dump process
+  memory into a path the command chooses.
+- ``--max-procs N`` sets ``RLIMIT_NPROC``. It is opt-in because the limit is
+  counted per real uid over the whole system.
+
+Environment
+~~~~~~~~~~~
+
+- The command's environment is cleared by default. Only ``PATH``, ``HOME``,
+  ``LANG``, ``LANGUAGE``, ``LC_ALL`` and the twelve remaining ``LC_*``
+  categories from ``locale.h`` are inherited.
+- ``--keep-env`` inherits everything.
+- ``--env NAME=VALUE`` sets one variable, may be repeated, and overrides an
+  inherited variable by name.
+- ``execvp`` was replaced with ``execvpe``.
+
+ABI
+~~~
+
+- ``--require-abi N`` turns the "your kernel is older than this feature"
+  warning into ``CAGED_ERR_ABI_TOO_OLD``. It is checked right after the probe,
+  before any ruleset exists. Without the option caged still warns and runs.
+
+Breaking changes
+~~~~~~~~~~~~~~~~
+
+- The command no longer inherits the caller's environment; use ``--keep-env``
+  or ``--env``.
+- Inherited file descriptors are closed. A caller that used to hand one over
+  must use a pipe or a file instead.
+- Exit status 1 now also covers an unmet ABI floor, a resource limit that could
+  not be set, a failure closing descriptors and a seccomp failure.
+
+Tests and documentation
+~~~~~~~~~~~~~~~~~~~~~~~
+
+- The functional suite grew from 24 to 74 cases, covering socket families,
+  ``SOCK_RAW`` with and without ``SOCK_CLOEXEC``, UDP, ``NETLINK_USERSOCK``,
+  ``AF_UNIX``, SysV IPC, inherited descriptors, core dumps, ``--max-procs``,
+  ``ptrace``, ``io_uring_setup``, the environment and ``--require-abi``.
+- New ``test_env`` unit suite plus golden tests over ``seccomp_export_pfc``;
+  mocks added for ``setrlimit``, ``close_range`` and
+  ``seccomp_syscall_resolve_name``.
+- Functional tests derive the ``python3`` prefix instead of assuming ``/usr``.
+- Documentation gained sections on the seccomp layer, limits and descriptors,
+  the command environment and the ABI floor.
+- Coverage stays at 100% line/branch/decision/function over ``caged.c``,
+  enforced by ``make check``.
+
 v0.1.0
 ------
 
