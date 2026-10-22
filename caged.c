@@ -143,6 +143,31 @@ static const char *DENY_SYSCALLS[] = {
 #define SYSV_IPC_N (sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0])
 #define DENY_SYSCALLS_N (sizeof DENY_SYSCALLS / sizeof DENY_SYSCALLS[0])
 
+/*
+  Environment variables that will be inherited by default.
+*/
+static const char *BASE_ENV[] = {
+    "PATH",
+    "HOME",
+    "LANG",
+    "LANGUAGE",
+    "LC_ALL",
+    "LC_CTYPE",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_COLLATE",
+    "LC_MONETARY",
+    "LC_MESSAGES",
+    "LC_PAPER",
+    "LC_NAME",
+    "LC_ADDRESS",
+    "LC_TELEPHONE",
+    "LC_MEASUREMENT",
+    "LC_IDENTIFICATION",
+};
+
+#define BASE_ENV_N (sizeof BASE_ENV / sizeof BASE_ENV[0])
+
 /* These feature stuff are used by the warning messages about
    landlock features not supported by the hosts ABI
 */
@@ -202,6 +227,10 @@ struct cmd_opts {
   int allow_network_sockets;
   int allow_sysv_ipc;
   long max_procs;
+  int keep_env;
+  char **env;
+  int n_env;
+  int cap_env;
   char **cmd;
   int help;
 };
@@ -212,18 +241,22 @@ static void cmd_opts_free(struct cmd_opts *opts) {
   free((void *)opts->rw_dir);
   free(opts->connect_ports);
   free(opts->bind_ports);
+  free(opts->env);
   opts->r_dir = NULL;
   opts->rw_dir = NULL;
   opts->connect_ports = NULL;
   opts->bind_ports = NULL;
+  opts->env = NULL;
   opts->n_r = 0;
   opts->n_rw = 0;
   opts->n_connect = 0;
   opts->n_bind = 0;
+  opts->n_env = 0;
   opts->cap_r = 0;
   opts->cap_rw = 0;
   opts->cap_connect = 0;
   opts->cap_bind = 0;
+  opts->cap_env = 0;
 }
 
 /*
@@ -698,6 +731,9 @@ static void print_help(FILE *out) {
       "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"
       "  --max-procs N                  set RLIMIT_NPROC to N (default: no "
       "limit)\n"
+      "  --keep-env                     keep the inherited environment\n"
+      "  --env NAME=VALUE               set NAME in the command's "
+      "environment\n"
       "  -h, --help                     show this help and exit\n"
       "\n"
       "Environment:\n"
@@ -801,6 +837,88 @@ static int push_port(unsigned short **list, int *n, int *cap,
   return 0;
 }
 
+/*
+  Appends `entry` to a dynamic list of environment strings, growing the
+  backing array (doubling its capacity) when it is full. Returns 0 on
+  success, -1 on allocation failure.
+*/
+static int push_env(char ***list, int *n, int *cap, const char *entry) {
+  if (*n == *cap) {
+    int new_cap = *cap ? *cap * 2 : 4;
+    char **grown = realloc(*list, (size_t)new_cap * sizeof **list);
+    if (grown == NULL) {
+      return -1;
+    }
+    *list = grown;
+    *cap = new_cap;
+  }
+  (*list)[(*n)++] = (char *)entry;
+  return 0;
+}
+
+/* Length of the NAME part of a NAME=VALUE entry. */
+static size_t env_name_len(const char *entry) {
+  const char *eq = strchr(entry, '=');
+  return eq == NULL ? strlen(entry) : (size_t)(eq - entry);
+}
+
+/* True when `entry`'s name is exactly the `name_len` bytes of `name`. */
+static int env_same_name(const char *entry, const char *name, size_t name_len) {
+  return env_name_len(entry) == name_len && strncmp(entry, name, name_len) == 0;
+}
+
+/* True when `entry` is one of the variables inherited by default. */
+static int env_is_base(const char *entry) {
+  for (size_t k = 0; k < BASE_ENV_N; k++) {
+    if (env_same_name(entry, BASE_ENV[k], strlen(BASE_ENV[k]))) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int env_overridden(const char *entry, const struct cmd_opts *opts) {
+  for (int k = 0; k < opts->n_env; k++) {
+    if (env_same_name(entry, opts->env[k], env_name_len(opts->env[k]))) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/*
+  Builds the environment variables. The default base, or
+  everything inherited with --keep-env and the --env values.
+  Returns a NULL-terminated array, or NULL on allocation failure.
+*/
+static char **build_env(const struct cmd_opts *opts) {
+  char **env = NULL;
+  int n = 0;
+  int cap = 0;
+  int failed = 0;
+
+  if (environ != NULL) {
+    for (char **e = environ; *e != NULL; e++) {
+      if (!opts->keep_env && !env_is_base(*e)) {
+        continue;
+      }
+      if (env_overridden(*e, opts)) {
+        continue;
+      }
+      failed |= push_env(&env, &n, &cap, *e) < 0;
+    }
+  }
+  for (int k = 0; k < opts->n_env; k++) {
+    failed |= push_env(&env, &n, &cap, opts->env[k]) < 0;
+  }
+  failed |= push_env(&env, &n, &cap, NULL) < 0;
+  if (failed) {
+    free(env);
+    return NULL;
+  }
+  return env;
+}
+
 static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
   if (argc <= 1) {
     print_help(stderr);
@@ -858,6 +976,20 @@ static int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
       }
       if (parse_positive(argv[i + 1], &opts->max_procs) < 0) {
         return fatal("--max-procs must be a positive number");
+      }
+      i += 2;
+    } else if (strcmp(argv[i], "--keep-env") == 0) {
+      opts->keep_env = 1;
+      i += 1;
+    } else if (strcmp(argv[i], "--env") == 0) {
+      if (i + 1 >= argc) {
+        return fatal("--env must have a value");
+      }
+      if (strchr(argv[i + 1], '=') == NULL || argv[i + 1][0] == '=') {
+        return fatal("--env must have the form NAME=VALUE");
+      }
+      if (push_env(&opts->env, &opts->n_env, &opts->cap_env, argv[i + 1]) < 0) {
+        return fatal("out of memory");
       }
       i += 2;
     } else if (strcmp(argv[i], "--allow-connect-tcp") == 0) {
@@ -1013,9 +1145,16 @@ int main(int argc, char *argv[]) {
     die(caged_strreturn(r));
   }
 
+  char **envp = build_env(&opts);
+  if (envp == NULL) {
+    cmd_opts_free(&opts);
+    die("error building environment");
+  }
   cmd_opts_free(&opts);
-  if (execvp(opts.cmd[0], opts.cmd) < 0) {
-    die("error execvp");
+  /* execvpe searches for the binary with the *caller's* PATH, not with envp,
+     so a cleared environment does not stop "caged -- sh" from finding sh. */
+  if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
+    die("error execvpe");
   }
   return 1;
 }

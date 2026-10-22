@@ -557,6 +557,42 @@ test_ordinary_syscalls_still_work() {
   check "ordinary syscalls still work" True "$out"
 }
 
+# The environment is cleared by default: a caller's secrets do not reach the
+# command, while PATH/HOME/LANG and the LC_* categories survive. The `env`
+# binary is used instead of python, which injects LC_CTYPE into os.environ.
+test_env_is_cleared_by_default() {
+  out=$(FOO=secret SSH_AUTH_SOCK=/run/user/1000/agent \
+        CAGED_DISABLE_WARNINGS=1 $CAGED $RO -- env 2>/dev/null |
+        grep -c '^\(FOO\|SSH_AUTH_SOCK\)=')
+  check "secrets are not inherited by default" 0 "$out"
+}
+
+test_env_keeps_path_and_locale() {
+  out=$(PATH=/usr/bin:/bin LANG=pt_BR.UTF-8 LC_ALL=pt_BR.UTF-8 \
+        CAGED_DISABLE_WARNINGS=1 $CAGED $RO -- env 2>/dev/null |
+        grep '^\(PATH\|LANG\|LC_ALL\)=' | sort | tr '\n' ' ')
+  check "PATH and the locale survive by default" \
+        "LANG=pt_BR.UTF-8 LC_ALL=pt_BR.UTF-8 PATH=/usr/bin:/bin " "$out"
+}
+
+test_keep_env_inherits_all() {
+  out=$(FOO=secret CAGED_DISABLE_WARNINGS=1 $CAGED $RO --keep-env -- env 2>/dev/null |
+        grep '^FOO=')
+  check "--keep-env inherits the caller's environment" "FOO=secret" "$out"
+}
+
+test_env_flag_sets_variable() {
+  out=$(FOO=old CAGED_DISABLE_WARNINGS=1 $CAGED $RO --env FOO=new -- env 2>/dev/null |
+        grep '^FOO=')
+  check "--env sets the variable" "FOO=new" "$out"
+}
+
+test_env_flag_overrides_without_duplicating() {
+  out=$(FOO=old CAGED_DISABLE_WARNINGS=1 \
+        $CAGED $RO --keep-env --env FOO=new -- env 2>/dev/null | grep -c '^FOO=')
+  check "--env overrides without duplicating" 1 "$out"
+}
+
 # restrict-self flags ar for abi >= 7. On my system it is abi 6, so what I
 # test here is that the flags don't break the caged run. Warnings will show
 # the user what is not enabled due to kernel version.
@@ -657,6 +693,12 @@ main() {
   test_ptrace_is_denied
   test_io_uring_is_denied
   test_ordinary_syscalls_still_work
+
+  test_env_is_cleared_by_default
+  test_env_keeps_path_and_locale
+  test_keep_env_inherits_all
+  test_env_flag_sets_variable
+  test_env_flag_overrides_without_duplicating
 
   test_restrict_flags_accepted
 

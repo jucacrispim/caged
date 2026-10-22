@@ -17,7 +17,7 @@ COV_CFLAGS  := $(TEST_CFLAGS) --coverage -fcondition-coverage
 DOCS_DIR    := docs
 DOCS_VENV   := $(HOME)/.virtualenvs/caged-docs
 
-UNIT_TESTS  := test_abi test_allow_access test_parse_cmd_line test_setup test_net test_help test_seccomp_pfc
+UNIT_TESTS  := test_abi test_allow_access test_parse_cmd_line test_setup test_net test_help test_seccomp_pfc test_env
 UNIT_BINS   := $(addprefix $(BUILD_DIR)/,$(UNIT_TESTS))
 COV_BINS    := $(addprefix $(COV_DIR)/,$(UNIT_TESTS))
 

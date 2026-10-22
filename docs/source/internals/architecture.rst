@@ -81,15 +81,21 @@ Main and the testable core
        die(caged_strreturn(r));
      }
 
+     char **envp = build_env(&opts);
+     if (envp == NULL) {
+       cmd_opts_free(&opts);
+       die("error building environment");
+     }
      cmd_opts_free(&opts);
-     if (execvp(opts.cmd[0], opts.cmd) < 0) {
-       die("error execvp");
+     /* execvpe searches with the *caller's* PATH, not with envp. */
+     if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
+       die("error execvpe");
      }
      return 1;
    }
 
 Everything that can be tested without a real kernel lives in ``caged_setup``
-and the helpers it calls. Only ``execvp`` (which replaces the process image)
+and the helpers it calls. Only ``execvpe`` (which replaces the process image)
 and the two ``die`` paths are excluded from coverage; they are exercised by the
 functional tests instead.
 
@@ -146,6 +152,8 @@ so there is no fixed upper bound:
      int allow_network_sockets;
      int allow_sysv_ipc;
      long max_procs;
+     int keep_env;
+     char **env;              int n_env;  int cap_env;
      char **cmd;
      int help;
    };
@@ -191,6 +199,36 @@ revoke a descriptor, and Landlock cannot either, so a socket handed to caged
 already connected to a service outside the sandbox would bypass both layers.
 ``close_range(3, ~0U, 0)`` removes it. Keeping fds 0–2 means ``die`` can still
 write to stderr after the fact.
+
+The command environment
+----------------------
+
+``build_env`` runs in ``main``, after the sandbox is in place, and returns the
+``NULL``-terminated array handed to ``execvpe``. It is deliberately outside
+``main`` so it can be unit tested: the environment is built from three pieces.
+
+``BASE_ENV``
+    The variables inherited by default: ``PATH``, ``HOME``, ``LANG``,
+    ``LANGUAGE`` and the twelve ``LC_*`` categories from ``locale.h``. They
+    are configuration and presentation, not authority — dropping ``PATH``
+    sends a child to the libc's compiled fallback and loses venvs, and
+    dropping the locale forces ``C``. The list is closed: no wildcard, so an
+    unknown ``LC_*`` category stays out and is inherited only with
+    ``--keep-env``.
+
+``--keep-env``
+    Take everything from ``environ`` instead of the base.
+
+``--env NAME=VALUE``
+    Applied last. An entry is compared **by name** against the inherited ones,
+    so ``--env FOO=new`` replaces an inherited ``FOO=old`` and leaves
+    ``FOOBAR`` untouched; the pushed entry is the only copy that survives.
+
+Two details are easy to get wrong. ``environ`` is ``NULL`` after ``clearenv()``
+(which the unit tests use), so the loop guards against it. And ``execvpe``
+searches for the program with the **caller's** ``PATH``, not with the array it
+is handed — a cleared environment does not stop ``caged -- sh`` from finding
+``sh``; what changes is the ``PATH`` the command itself sees.
 
 The seccomp layer
 -----------------

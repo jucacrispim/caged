@@ -462,6 +462,92 @@ void test_allow_network_sockets(void) {
   cmd_opts_free(&opts);
 }
 
+/* --keep-env is a boolean and defaults off (the environment is cleared) */
+void test_keep_env(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--keep-env", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(opts.keep_env == 1);
+  assert(opts.n_env == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* --env adds one NAME=VALUE entry */
+void test_env_flag(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", "FOO=bar", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(opts.keep_env == 0);
+  assert(opts.n_env == 1);
+  assert(strcmp(opts.env[0], "FOO=bar") == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* --env accumulates, order preserved, empty values allowed */
+void test_env_flag_repeated(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", "A=1", "--env", "B=", "--", "true", NULL};
+
+  assert(parse_cmd_line(7, argv, &opts) == 0);
+  assert(opts.n_env == 2);
+  assert(strcmp(opts.env[0], "A=1") == 0);
+  assert(strcmp(opts.env[1], "B=") == 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_env_missing_value(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* an entry without '=' has no name to override */
+void test_env_missing_equals(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", "FOO", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.n_env == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* an empty name is not a variable */
+void test_env_empty_name(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", "=bar", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.n_env == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* allocation failure while growing the --env list -> error */
+void test_env_out_of_memory(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", "FOO=bar", "--", "true", NULL};
+
+  reset_fake();
+  fake.fail_realloc = 1;
+  fake.realloc_err = ENOMEM;
+
+  errno = 0;
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.n_env == 0);
+  assert(errno == ENOMEM);
+
+  cmd_opts_free(&opts);
+}
+
 /* --max-procs sets the process limit */
 void test_max_procs(void) {
   struct cmd_opts opts = {0};
@@ -648,6 +734,13 @@ int main(void) {
   test_max_procs_negative();
   test_max_procs_trailing_garbage();
   test_max_procs_overflow();
+  test_keep_env();
+  test_env_flag();
+  test_env_flag_repeated();
+  test_env_missing_value();
+  test_env_missing_equals();
+  test_env_empty_name();
+  test_env_out_of_memory();
 
   printf("OK\n");
   return 0;

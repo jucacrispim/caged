@@ -32,6 +32,9 @@ caged [OPTIONS] -- CMD [ARGS...]
 - **Dangerous syscalls**: `ptrace`, `process_vm_*`, `pidfd_getfd`, `kcmp`,
   `keyctl`/`add_key`/`request_key`, `io_uring_setup`, `bpf`,
   `perf_event_open` and `userfaultfd` always fail with `ENOSYS`.
+- **Environment**: cleared by default — only `PATH`, `HOME`, `LANG`,
+  `LANGUAGE` and the `LC_*` categories are inherited. Use `--keep-env` for
+  everything, or `--env NAME=VALUE` to set a single variable.
 - **Socket families**: every family except `AF_INET`, `AF_INET6` and
   `AF_NETLINK` is denied, including `AF_UNIX`; release them with
   `--allow-network-sockets` / `--allow-unix-sockets`. Raw sockets

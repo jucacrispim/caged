@@ -226,6 +226,36 @@ cannot raise them back.
     the whole system, not per process tree, so ``N`` has to be larger than the
     number of processes the user already has.
 
+Command environment
+~~~~~~~~~~~~~~~~~~~
+
+The command runs with a cleared environment by default: only a base of
+configuration and presentation variables is inherited — ``PATH``, ``HOME``,
+``LANG``, ``LANGUAGE`` and the ``LC_*`` categories defined by ``locale.h``.
+Credentials and session pointers (API keys, ``SSH_AUTH_SOCK``,
+``DBUS_SESSION_BUS_ADDRESS``, ``DISPLAY``, ``XAUTHORITY``, …) do not reach the
+command. Nothing is fabricated: what is inherited comes from caged's own
+environment.
+
+Stripping the whole environment would break the command in ways that are hard
+to see: without ``PATH`` a child falls back to the libc's ``/bin:/usr/bin`` and
+loses venvs and ``~/.local/bin``, and without the locale it runs in ``C``,
+sorting bytes instead of following the collation rules.
+
+``--keep-env``
+    Inherit the whole environment instead of the base.
+
+``--env NAME=VALUE``
+    Set ``NAME`` for the command. It overrides an inherited variable of the
+    same name — the comparison is by name, so ``--env FOO=new`` drops an
+    inherited ``FOO=old`` and leaves ``FOOBAR`` alone. May be repeated.
+
+.. note::
+
+   The program itself is looked up with the **caller's** ``PATH``, not with the
+   command's environment, so ``caged -- sh`` still finds ``sh`` even though the
+   command's ``PATH`` is cleared.
+
 Misc
 ~~~~
 
@@ -237,7 +267,9 @@ Environment
 
 ``CAGED_DISABLE_WARNINGS=1``
     Silence the kernel-ABI compatibility warnings printed on stderr. Only the
-    literal value ``1`` disables them.
+    literal value ``1`` disables them. This variable is read from caged's own
+    environment, before the command's environment is built, so it works
+    whether or not ``--keep-env`` is given.
 
 Exit status
 -----------
