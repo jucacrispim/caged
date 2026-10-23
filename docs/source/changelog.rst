@@ -1,6 +1,34 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Library split and documentation updates.
+
+- The single translation unit is now five files, along a library /
+  command-line boundary: ``caged.h`` (public interface — ``enum caged_return``,
+  ``struct cmd_opts``, the diagnostics globals and the ``caged_setup`` /
+  ``caged_strreturn`` / ``cmd_opts_free`` declarations), ``caged.c`` (the
+  sandbox logic, nothing else), ``cli.h`` / ``cli.c`` (argument parsing, usage
+  text, ABI warnings and the command environment) and ``main.c`` (the ``die``
+  and ``main`` front end).
+- ``caged_setup``, ``caged_strreturn`` and ``cmd_opts_free`` are the library
+  API; ``parse_cmd_line``, ``print_help``, ``build_env`` and
+  ``warn_unsupported_features`` are declared in ``cli.h``. The diagnostics
+  globals (``seccomp_detail``, ``seccomp_failed_family``,
+  ``seccomp_failed_syscall``, ``abi_found``) are ``extern`` and declared in
+  ``caged.h``. All other helpers stay ``static``.
+- The library no longer writes to ``stderr``: the ABI warnings moved out of
+  ``caged_setup`` and are printed by ``main``, which is the only piece that
+  knows about the terminal. The wording and the ``CAGED_DISABLE_WARNINGS``
+  switch are unchanged.
+- The ``LANDLOCK_*`` fallback macros moved to ``caged.h``, since both
+  ``caged.c`` and ``cli.c`` need them.
+- The unit tests still include ``caged.c`` (and ``cli.c`` where needed) to
+  reach the ``static`` helpers. Coverage stays at 100%
+  line/branch/decision/function, now measured over ``caged.c`` and ``cli.c``.
+
 v0.2.0
 ------
 

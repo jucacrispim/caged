@@ -19,6 +19,7 @@
 
 #define main caged_program_main
 #include "../../caged.c"
+#include "../../cli.c"
 #undef main
 #include "fake_syscalls.h"
 #include <assert.h>

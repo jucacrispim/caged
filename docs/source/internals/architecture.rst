@@ -1,11 +1,39 @@
 Architecture
 ============
 
-caged is a single translation unit, ``caged.c``. There is no library split yet:
-everything lives in one file, and the unit tests include it directly (see
-:doc:`testing`). This page describes how it is structured and how the setup
-flow works. The semantics of the individual rights are in :doc:`rules`, and the
-ABI gating in :doc:`abi`.
+caged is split in five files, along a library / command-line boundary:
+
+``caged.h``
+    The public interface. It holds ``enum caged_return``, ``struct cmd_opts``,
+    the diagnostics globals (``seccomp_detail``, ``seccomp_failed_family``,
+    ``seccomp_failed_syscall``, ``abi_found``), the declarations of
+    ``caged_setup``, ``caged_strreturn`` and ``cmd_opts_free`` — the pieces a
+    program embedding caged needs — and the ``LANDLOCK_*`` fallback macros the
+    headers of an older system lack.
+
+``caged.c``
+    The sandbox logic, and only that: the ABI gating, the Landlock ruleset and
+    rules, the seccomp filter and the resource limits. It parses no arguments
+    and prints nothing for the user, which is what makes it linkable as a
+    library. Everything that is not part of the public API stays ``static``
+    here.
+
+``cli.h`` / ``cli.c``
+    The command-line front end proper: ``parse_cmd_line``, ``print_help``,
+    ``build_env`` and the ABI warnings, plus the ``push_*`` list helpers and
+    the ``BASE_ENV`` table they are built from. None of it is part of the
+    sandbox.
+
+``main.c``
+    The executable: ``die`` and ``main``. It parses ``argv``, calls
+    ``caged_setup``, prints the ABI warnings and ``execvpe``\\s the command.
+    Keeping it separate is what makes ``caged.c`` linkable as a library.
+
+The unit tests still include ``caged.c`` (and, where needed, ``cli.c``)
+directly to reach the ``static`` helpers (see :doc:`testing`). This page
+describes how the pieces are structured and how the setup flow works. The
+semantics of the individual rights are in :doc:`rules`, and the ABI gating in
+:doc:`abi`.
 
 There are two enforcement layers. **Landlock** governs everything that has a
 name: paths, TCP ports and IPC scopes. **seccomp** governs what Landlock cannot
@@ -53,7 +81,7 @@ The three Landlock syscalls have no glibc wrapper, so they are issued raw with
 Main and the testable core
 --------------------------
 
-``main`` is intentionally thin:
+``main`` (in ``main.c``) is intentionally thin:
 
 .. code-block:: c
 
@@ -104,8 +132,8 @@ Main and the testable core
 
 Everything that can be tested without a real kernel lives in ``caged_setup``
 and the helpers it calls. Only ``execvpe`` (which replaces the process image)
-and the two ``die`` paths are excluded from coverage; they are exercised by the
-functional tests instead.
+and the ``die`` paths, both in ``main.c``, are excluded from coverage; they are
+exercised by the functional tests instead.
 
 ``caged_setup`` returns an ``enum caged_return`` rather than an error string,
 so the caller can ``switch`` on it and the library form (see below) can map it
@@ -143,7 +171,8 @@ added but not handled.
 Options and parsing
 -------------------
 
-All command-line state lives in ``struct cmd_opts``. The path and port lists
+All command-line state lives in ``struct cmd_opts`` (declared in ``caged.h``
+because ``caged_setup`` takes it, filled by ``cli.c``). The path and port lists
 are dynamic and grow by doubling their capacity (``push_path`` / ``push_port``),
 so there is no fixed upper bound:
 
@@ -168,10 +197,11 @@ so there is no fixed upper bound:
      int help;
    };
 
-``parse_cmd_line`` walks ``argv`` with ``strcmp`` and fills the struct. Usage
-errors are reported with ``fatal`` (no ``errno``); runtime failures use
-``die`` (which appends ``strerror(errno)``). Running with no arguments is the
-one usage error that also prints the help, on stderr.
+``parse_cmd_line`` (in ``cli.c``) walks ``argv`` with ``strcmp`` and fills the
+struct. Usage errors are reported with ``fatal`` (no ``errno``); runtime
+failures use ``die`` (which appends ``strerror(errno)``, and lives in
+``main.c``). Running with no arguments is the one usage error that also prints
+the help, on stderr.
 
 ``struct cmd_opts.cmd`` note: ``cmd`` is ``char **`` (not
 ``const char **``) because it points into ``argv`` — converting away the const
@@ -213,8 +243,9 @@ write to stderr after the fact.
 The command environment
 ----------------------
 
-``build_env`` runs in ``main``, after the sandbox is in place, and returns the
-``NULL``-terminated array handed to ``execvpe``. It is deliberately outside
+``build_env`` (in ``cli.c``) runs in ``main``, after the sandbox is in place,
+and returns the ``NULL``-terminated array handed to ``execvpe``. It is
+deliberately outside
 ``main`` so it can be unit tested: the environment is built from three pieces.
 
 ``BASE_ENV``
@@ -327,16 +358,25 @@ govern the command.
 Going further
 -------------
 
-The declared end goal is to turn ``caged.c`` into a reusable library: split it
-into ``caged.c`` (logic) + ``caged.h`` (the public API — ``enum caged_return``,
-``caged_setup``, ``caged_strreturn``) + a ``main.c``, with the tests linking
-against the object instead of including the source. The ``enum`` is already the
-natural preparation for that. The original motivation is to embed caged in
-another program to wrap a whole client process at launch.
+The library split is in place: ``caged.c`` (logic) + ``caged.h`` (the public
+API) + ``cli.c`` / ``cli.h`` (the command-line front end) + ``main.c`` (the
+executable). What is still missing to make caged a library in practice is the
+other half of the split: the unit tests still ``#include "../../caged.c"`` to
+reach the ``static`` helpers. Linking them against ``caged.o`` instead would
+require giving the internal helpers external linkage and an internal header,
+which is a separate change; until then, the production build is the only
+consumer of ``caged.c`` as its own translation unit.
 
-Two cleanups belong to that split. ``apply_seccomp`` currently builds and
-installs the filter in one go; separating a side-effect-free
+The original motivation for the split was to embed caged in another program to
+wrap a whole client process at launch. ``caged_setup`` plus ``struct cmd_opts``
+in ``caged.h`` is the interface for that: fill the struct, call
+``caged_setup``, and treat a non-``CAGED_OK`` return as fatal for the caller.
+
+Two cleanups also belong to this line of work. ``apply_seccomp`` currently
+builds and installs the filter in one go; separating a side-effect-free
 ``build_seccomp_ctx`` from an ``apply_seccomp`` that only calls
 ``seccomp_load`` would let a unit test export the generated filter as text
-(``seccomp_export_pfc``) and compare it, and would give the two seccomp globals
-a proper home instead of file scope.
+(``seccomp_export_pfc``) and compare it. And the four diagnostics globals,
+declared in ``caged.h`` and defined in ``caged.c``, are the remaining hidden
+state: they exist because libseccomp returns ``-EINVAL``, ``-EPERM``-style
+codes instead of ``-1`` plus ``errno``.

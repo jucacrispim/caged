@@ -18,7 +18,7 @@ Layout
        test_abi.c             get_handled_access_* / get_supported_*
        test_allow_access.c    allow_access: dir vs file, errors
        test_parse_cmd_line.c  parsing, conflicts, OOM
-       test_setup.c           caged_setup, caged_strreturn, warnings
+       test_setup.c           caged_setup, caged_strreturn, ABI warnings
        test_net.c             push_port, parse_port, net rules
        test_help.c            print_help, --help / -h, no-args
      functional/
@@ -38,6 +38,18 @@ access to the ``static`` functions:
 
 (``#undef main`` is required, otherwise the macro would rename the test's own
 ``main``.)
+
+The tests that need the command-line helpers (``parse_cmd_line``,
+``print_help``, ``build_env``, ``warn_unsupported_features``) or the ``push_*``
+list helpers include ``cli.c`` right after ``caged.c``:
+
+.. code-block:: c
+
+   #include "../../caged.c"
+   #include "../../cli.c"
+
+Both sources end up in the same translation unit. The two sets of ``static``
+functions are disjoint, so there is no collision.
 
 The kernel is replaced with the linker's ``--wrap`` facility: every call to a
 wrapped symbol becomes a ``__wrap_*`` stub, and the real one stays available as
@@ -80,13 +92,15 @@ Coverage
 
 ``make coverage`` compiles all the test binaries with ``--coverage`` and
 ``-fcondition-coverage``, runs them, and calls ``gcovr`` with a filter limited
-to ``caged.c`` (each test includes the source, so without the filter gcovr
-would sum the per-binary ``.gcda`` files and inflate the numbers). The gate
-fails below **100%** on lines, branches, decisions and functions. Out-of-memory
-paths (a failing ``realloc``) are covered by mocking, not excluded.
+to ``caged.c`` and ``cli.c`` (each test includes the sources, so without the
+filter gcovr would sum the per-binary ``.gcda`` files and inflate the numbers).
+The gate fails below **100%** on lines, branches, decisions and functions, for
+the two files separately. Out-of-memory paths (a failing ``realloc``) are
+covered by mocking, not excluded.
 
-Only two regions carry ``GCOV_EXCL``: the body of ``die`` and ``main``. Both
-are exercised by the functional tests instead.
+Only two regions carry ``GCOV_EXCL``: the body of ``die`` and ``main``, both now
+in ``main.c`` (the number is unchanged; the two functions simply moved out of
+``caged.c``). Both are exercised by the functional tests instead.
 
 ``GCOV_EXCL`` is used only when explicitly requested; it is not a way to dodge a
 hard-to-test branch.

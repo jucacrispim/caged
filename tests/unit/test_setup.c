@@ -19,6 +19,7 @@
 
 #define main caged_program_main
 #include "../../caged.c"
+#include "../../cli.c"
 #undef main
 #include "fake_syscalls.h"
 #include <assert.h>
@@ -781,21 +782,12 @@ void test_strreturn_unknown_error(void) {
   assert(strcmp(caged_strreturn((enum caged_return)999), "unknown error") == 0);
 }
 
-/* ABI used by the setup run whose stderr is being captured. */
-static long g_setup_abi;
-
-static void run_setup_quiet(void) {
-  reset_fake();
-  fake.abi = g_setup_abi;
-  fake.create_ruleset_ret = 3;
-  fake.restrict_self_ret = 0;
-
-  struct cmd_opts opts = {0};
-  caged_setup(&opts);
-}
-
-/* Runs caged_setup with stderr redirected and copies the captured text. */
-static void capture_setup_warnings(long abi, char *buf, size_t size) {
+/*
+  Runs warn_unsupported_features() with stderr redirected and copies the
+  captured text. The warnings are the front end's job (cli.c), not the
+  library's, so they are tested here directly.
+*/
+static void capture_warnings(long abi, char *buf, size_t size) {
   int pipefd[2];
   assert(pipe(pipefd) == 0);
 
@@ -805,8 +797,7 @@ static void capture_setup_warnings(long abi, char *buf, size_t size) {
   assert(dup2(pipefd[1], STDERR_FILENO) >= 0);
   close(pipefd[1]);
 
-  g_setup_abi = abi;
-  run_setup_quiet();
+  warn_unsupported_features(abi);
 
   fflush(stderr);
   assert(dup2(saved, STDERR_FILENO) >= 0);
@@ -823,14 +814,14 @@ static void capture_setup_warnings(long abi, char *buf, size_t size) {
 /* a kernel new enough for everything prints no warning at all */
 void test_warn_none_when_all_supported(void) {
   char buf[1024];
-  capture_setup_warnings(9, buf, sizeof buf);
+  capture_warnings(9, buf, sizeof buf);
   assert(buf[0] == '\0');
 }
 
 /* only the features the ABI lacks are listed */
 void test_warn_partial(void) {
   char buf[2048];
-  capture_setup_warnings(6, buf, sizeof buf);
+  capture_warnings(6, buf, sizeof buf);
 
   assert(strstr(buf, "does not support some features") != NULL);
   assert(strstr(buf, "restrict-self log flags (needs ABI 7)") != NULL);
@@ -845,7 +836,7 @@ void test_warn_partial(void) {
 /* an old ABI lists every feature */
 void test_warn_all_when_none_supported(void) {
   char buf[4096];
-  capture_setup_warnings(1, buf, sizeof buf);
+  capture_warnings(1, buf, sizeof buf);
 
   assert(strstr(buf, "network access control (needs ABI 4)") != NULL);
   assert(strstr(buf, "ioctl on device files (needs ABI 5)") != NULL);
@@ -859,7 +850,7 @@ void test_warn_all_when_none_supported(void) {
 void test_warn_disabled_by_env(void) {
   char buf[1024];
   assert(setenv("CAGED_DISABLE_WARNINGS", "1", 1) == 0);
-  capture_setup_warnings(6, buf, sizeof buf);
+  capture_warnings(6, buf, sizeof buf);
   assert(buf[0] == '\0');
   assert(unsetenv("CAGED_DISABLE_WARNINGS") == 0);
 }
@@ -868,7 +859,7 @@ void test_warn_disabled_by_env(void) {
 void test_warn_env_other_value_keeps_warnings(void) {
   char buf[1024];
   assert(setenv("CAGED_DISABLE_WARNINGS", "0", 1) == 0);
-  capture_setup_warnings(6, buf, sizeof buf);
+  capture_warnings(6, buf, sizeof buf);
   assert(strstr(buf, "does not support some features") != NULL);
   assert(unsetenv("CAGED_DISABLE_WARNINGS") == 0);
 }

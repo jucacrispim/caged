@@ -86,7 +86,13 @@ a warning on stderr listing each missing feature and the ABI it needs:
    caged: warning:   - restrict-self TSYNC (needs ABI 8)
    caged: warning:   - UNIX socket name resolution (needs ABI 9)
 
-The list comes from the ``FEATURES`` table in ``caged.c``; a kernel new enough
+The list comes from the ``FEATURES`` table in ``cli.c``; a kernel new enough
 for everything prints nothing. Warnings are informational only — the program
 still runs with the features it has. Setting ``CAGED_DISABLE_WARNINGS=1``
 silences them.
+
+The warnings belong to the command-line front end, not to the library:
+``caged_setup`` never writes to ``stderr``. ``main`` calls
+``warn_unsupported_features`` with the ABI ``caged_setup`` recorded in
+``abi_found``, so a program embedding caged decides for itself whether to
+report the gap, and in which format.

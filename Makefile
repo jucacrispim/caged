@@ -21,6 +21,11 @@ UNIT_TESTS  := test_abi test_allow_access test_parse_cmd_line test_setup test_ne
 UNIT_BINS   := $(addprefix $(BUILD_DIR)/,$(UNIT_TESTS))
 COV_BINS    := $(addprefix $(COV_DIR)/,$(UNIT_TESTS))
 
+# The library (caged.c) and the command-line front end (cli.c) are measured
+# separately: most test binaries include one, the parsing/help/env ones
+# include both.
+COV_SOURCES := --filter 'caged\.c$$' --filter 'cli\.c$$'
+
 .PHONY: all build unit test functional check coverage clean docs docs-env seccomp-dep
 
 all: build
@@ -34,20 +39,20 @@ seccomp-dep:
 	  $(CC) -x c -fsyntax-only - 2>/dev/null || \
 	  { echo "libseccomp headers not found: sudo apt install libseccomp-dev" >&2; exit 1; }
 
-$(BUILD_DIR)/caged: caged.c
+$(BUILD_DIR)/caged: caged.c cli.c main.c caged.h cli.h
 	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+	$(CC) $(CFLAGS) -o $@ caged.c cli.c main.c $(LDLIBS)
 
 unit: $(UNIT_BINS)
 	@set -e; for t in $(UNIT_BINS); do echo "== $$t"; $$t; done
 
-$(BUILD_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
+$(BUILD_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c caged.h cli.c cli.h
 	mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(LDLIBS)
 
 # The pseudo-filter-code test uses the real libseccomp on purpose (it checks
-# the generated rules): no mocks, no fake_syscalls.
-$(BUILD_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c
+# the generated rules): no mocks, no fake_syscalls, and no cli.c either.
+$(BUILD_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
 	mkdir -p $(@D)
 	$(CC) $(TEST_CFLAGS) -o $@ $< $(LDLIBS)
 
@@ -61,7 +66,7 @@ check: seccomp-dep unit coverage functional
 coverage: $(COV_BINS)
 	@set -e; for t in $(COV_BINS); do $$t; done
 	mkdir -p $(COV_DIR)/report
-	gcovr --root . --filter 'caged\.c$$' \
+	gcovr --root . $(COV_SOURCES) \
 	      --txt --txt-summary \
 	      --html-details $(COV_DIR)/report/index.html \
 	      --decision \
@@ -71,11 +76,11 @@ coverage: $(COV_BINS)
 	      --fail-under-function 100 \
 	      $(COV_DIR)
 
-$(COV_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c
+$(COV_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c caged.h cli.c cli.h
 	mkdir -p $(@D)
 	$(CC) $(COV_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(LDLIBS)
 
-$(COV_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c
+$(COV_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
 	mkdir -p $(@D)
 	$(CC) $(COV_CFLAGS) -o $@ $< $(LDLIBS)
 
