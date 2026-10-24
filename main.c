@@ -33,10 +33,20 @@
 #include "caged.h"
 #include "cli.h"
 
+/*
+  Exit status 125 means "caged itself failed": the sandbox could not be built
+  or the command could not be executed. It is distinct from 2 (usage error) and
+  from any status the command returns, so a caller that wraps caged — the tools
+  of llm-bridge, for instance — can tell a broken sandbox from a command that
+  merely exited with 1. 125 is the sh/docker/sudo convention for "the wrapper
+  failed".
+*/
+#define EXIT_SETUP_FAILED 125
+
 /* GCOV_EXCL_START */
 static void die(const char *msg) {
   fprintf(stderr, "%s: %s\n", msg, strerror(errno));
-  exit(1);
+  exit(EXIT_SETUP_FAILED);
 }
 /* GCOV_EXCL_STOP */
 
@@ -86,6 +96,6 @@ int main(int argc, char *argv[]) {
   if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
     die("error execvpe");
   }
-  return 1;
+  return EXIT_SETUP_FAILED;
 }
 /* GCOV_EXCL_STOP */

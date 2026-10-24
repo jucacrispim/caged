@@ -199,19 +199,19 @@ test_no_arguments_exits_2() {
 }
 
 
-test_nonexistent_path_exits_1() {
+test_nonexistent_path_exits_125() {
   $CAGED --ro /no/such/path -- true 2>/dev/null
-  check "nonexistent path exits 1" 1 $?
+  check "nonexistent path exits 125" 125 $?
 }
 
-test_missing_program_exits_1() {
+test_missing_program_exits_125() {
   $CAGED $RO -- /nonexistent/prog 2>/dev/null
-  check "missing program path exits 1" 1 $?
+  check "missing program path exits 125" 125 $?
 }
 
-test_unknown_command_exits_1() {
+test_unknown_command_exits_125() {
   $CAGED $RO -- no_such_command_xyz 2>/dev/null
-  check "unknown command exits 1" 1 $?
+  check "unknown command exits 125" 125 $?
 }
 
 
@@ -603,7 +603,7 @@ test_restrict_flags_accepted() {
 }
 
 # --tsync reaches the seccomp layer too: the filter is loaded with the TSYNC
-# attribute, and if the kernel refused it the setup would fail with exit 1.
+# attribute, and if the kernel refused it the setup would fail with exit 125.
 test_tsync_applies_seccomp() {
   out=$(socket_probe "--tsync" "socket.socket(socket.AF_INET, socket.SOCK_DGRAM)")
   check "--tsync keeps the seccomp filter in force" 13 "$out"
@@ -631,9 +631,9 @@ test_warnings_disabled_by_env() {
 
 # --require-abi turns the ABI warning into a hard failure: a floor the kernel
 # cannot meet must fail before the sandbox is built.
-test_require_abi_unmet_exits_1() {
+test_require_abi_unmet_exits_125() {
   err=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO --require-abi 99 -- true 2>&1 >/dev/null)
-  check "--require-abi above the kernel ABI exits 1" 1 $?
+  check "--require-abi above the kernel ABI exits 125" 125 $?
   case "$err" in
   *"Landlock ABI"*"required"*) ok "--require-abi reports both numbers" ;;
   *) bad "--require-abi reports both numbers ('$err')" ;;
@@ -681,9 +681,9 @@ main() {
   test_missing_separator_exits_2
   test_empty_command_exits_2
   test_no_arguments_exits_2
-  test_nonexistent_path_exits_1
-  test_missing_program_exits_1
-  test_unknown_command_exits_1
+  test_nonexistent_path_exits_125
+  test_missing_program_exits_125
+  test_unknown_command_exits_125
 
   test_scope_signal_denied_by_default
   test_scope_signal_allowed_with_flag
@@ -727,7 +727,7 @@ main() {
   test_tsync_applies_seccomp
 
   test_warnings_printed_by_default
-  test_require_abi_unmet_exits_1
+  test_require_abi_unmet_exits_125
   test_require_abi_met_runs
   test_warnings_disabled_by_env
 

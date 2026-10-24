@@ -313,13 +313,19 @@ Exit status
 
 - **0** — the command ran (``caged`` replaces itself with the command, so the
   exit status is the command's).
-- **1** — setup failed (Landlock unavailable, the ABI is below
-  ``--require-abi``, ruleset error, a path could not be opened, a limit could
-  not be set, the seccomp filter could not be installed) or the command could
-  not be executed.
 - **2** — usage error (unknown option, missing value, conflicting options,
   missing ``-- cmd``, or run with no arguments, which prints the help on
   stderr).
+- **125** — ``caged`` itself failed: setup failed (Landlock unavailable, the
+  ABI is below ``--require-abi``, ruleset error, a path could not be opened, a
+  limit could not be set, the seccomp filter could not be installed) or the
+  command could not be executed.
+
+Any other status is the command's. The split between **2**, **125** and the
+command's own status is what lets a wrapper tell a broken invocation, a broken
+sandbox and a command that simply exited with the same number apart; ``125`` is
+the convention for "the wrapper failed" used by ``sh``, ``sudo`` and
+``docker run``.
 
 Examples
 --------
