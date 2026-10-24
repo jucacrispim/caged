@@ -1,6 +1,29 @@
 Changelog
 =========
 
+v0.4.0
+------
+
+Fourth release. Gives caged's own failures their own exit status, so a caller
+that wraps it can tell a broken sandbox from a command that exited with the
+same code. No command-line option changed and no policy changed.
+
+Exit status
+~~~~~~~~~~~
+
+- A setup or ``exec`` failure now exits with **125** instead of 1, freeing 1
+  for the command. ``2`` stays the usage error and every other status is the
+  command's, so a wrapper can tell a broken invocation, a broken sandbox and a
+  command that exited with the same number apart. 125 is the convention for
+  "the wrapper failed", as used by ``sh``, ``sudo`` and ``docker run``.
+
+Upgrading
+~~~~~~~~~
+
+- Scripts that checked ``$? = 1`` for a setup or ``exec`` failure must check
+  ``125``. A command that exits with 1 is now distinguishable from caged
+  failing.
+
 v0.3.0
 ------
 
