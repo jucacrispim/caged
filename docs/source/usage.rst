@@ -224,8 +224,29 @@ service outside the sandbox, for example.
 
 .. warning::
 
-   caged keeps only ``stdin``, ``stdout`` and ``stderr``. Anything else must be
-   passed through a pipe or a file.
+   caged keeps only ``stdin``, ``stdout`` and ``stderr``, plus the single
+   ``--report-fd`` descriptor described below. Anything else must be passed
+   through a pipe or a file.
+
+``--report-fd N``
+    Report caged's own failures on descriptor ``N`` (``N >= 3``), in addition
+    to stderr: a usage error, a setup failure or a command that could not be
+    executed all write there, and **nothing** is written when the setup
+    succeeded. The descriptor is marked close-on-exec, so the command never
+    inherits it.
+
+    This is the only unambiguous way for a wrapper to tell "caged failed" from
+    "the command exited with that status". The exit status cannot carry it:
+    caged replaces itself with the command, so the two share one status space
+    and no value can be reserved for the wrapper — not even ``125``, which a
+    command may well return by itself. With ``--report-fd`` an empty
+    descriptor means the command ran, whatever status it exited with::
+
+        caged --ro /usr --report-fd 3 -- sh -c 'exit 125' 3>report
+        # exit status 125, and "report" is empty: that was the command
+
+        caged --ro /no/such/path --report-fd 3 -- true 3>report
+        # exit status 125, and "report" carries the setup error
 
 Core dumps are always disabled (``RLIMIT_CORE = 0``): a core writes process
 memory, secrets included, to a path the confined process picks through its
@@ -326,6 +347,12 @@ command's own status is what lets a wrapper tell a broken invocation, a broken
 sandbox and a command that simply exited with the same number apart; ``125`` is
 the convention for "the wrapper failed" used by ``sh``, ``sudo`` and
 ``docker run``.
+
+The status is a hint, not a proof: the command shares it (caged ``execvp``\s
+into it), so a command that exits with ``2`` or ``125`` looks exactly like a
+caged failure. A wrapper that needs certainty passes ``--report-fd`` and trusts
+the descriptor instead: empty means the command ran, non-empty carries the
+diagnostic.
 
 Examples
 --------

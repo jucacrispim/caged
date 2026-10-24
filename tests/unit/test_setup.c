@@ -472,6 +472,83 @@ void test_setup_close_fds_error(void) {
   assert(fake.seccomp_load_calls_count == 1);
 }
 
+/* With no report descriptor the sweep is the single range above stderr. */
+void test_close_inherited_fds_no_report(void) {
+  reset_fake();
+
+  assert(close_inherited_fds(0) == 0);
+  assert(fake.close_range_calls_count == 1);
+  assert(fake.last_close_range_first == 3);
+  assert(fake.last_close_range_last == ~0U);
+}
+
+/* A report descriptor at 3 (the first one above stderr) leaves nothing below
+   it: the range below would be empty, and the kernel rejects first > last. */
+void test_close_inherited_fds_report_fd_three(void) {
+  reset_fake();
+
+  assert(close_inherited_fds(3) == 0);
+  assert(fake.close_range_calls_count == 1);
+  assert(fake.last_close_range_first == 4);
+  assert(fake.last_close_range_last == ~0U);
+}
+
+/* A higher report descriptor splits the sweep around it. */
+void test_close_inherited_fds_report_fd_higher(void) {
+  reset_fake();
+
+  assert(close_inherited_fds(7) == 0);
+  assert(fake.close_range_calls_count == 2);
+  assert(fake.last_close_range_first == 8);
+  assert(fake.last_close_range_last == ~0U);
+}
+
+/* failing the first half of a split sweep aborts the setup */
+void test_close_inherited_fds_report_fd_error(void) {
+  reset_fake();
+  fake.close_range_ret = -1;
+  fake.close_range_err = EINVAL;
+
+  assert(close_inherited_fds(7) < 0);
+  assert(fake.close_range_calls_count == 1);
+}
+
+/* --report-fd is claimed before anything else: the descriptor is marked
+   close-on-exec and kept open across the sweep, so the command never inherits
+   it but the front end can still report a failure. */
+void test_setup_report_fd(void) {
+  setup_reaches_seccomp();
+  int fd = open("/dev/null", O_WRONLY);
+  assert(fd >= 3);
+
+  struct cmd_opts opts = {0};
+  opts.report_fd = fd;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.close_range_calls_count >= 1);
+  assert(fake.last_close_range_last == ~0U);
+  int flags = fcntl(fd, F_GETFD);
+  assert(flags >= 0);
+  assert((flags & FD_CLOEXEC) != 0);
+  close(fd);
+}
+
+/* A descriptor that cannot be claimed is a setup failure, not a silent
+   "nothing was reported": the caller must never mistake a broken sandbox for
+   the command's own exit status. */
+void test_setup_report_fd_error(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.report_fd = 9999;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_REPORT_FD);
+  assert(errno == EBADF);
+  assert(fake.create_calls_count == 0);
+  assert(fake.close_range_calls_count == 0);
+}
+
 /* By default the filter denies unix and network sockets: all rules run and
    the filter is loaded exactly once. */
 void test_setup_seccomp_defaults(void) {
@@ -828,6 +905,7 @@ void test_strreturn(void) {
       CAGED_ERR_SECCOMP_LOAD,
       CAGED_ERR_SECCOMP_TSYNC,
       CAGED_ERR_ENV,
+      CAGED_ERR_REPORT_FD,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
     const char *msg = caged_strreturn(codes[i]);
@@ -946,6 +1024,12 @@ int main(void) {
   test_setup_rlimit_core_error();
   test_setup_rlimit_nproc_error();
   test_setup_close_fds_error();
+  test_close_inherited_fds_no_report();
+  test_close_inherited_fds_report_fd_three();
+  test_close_inherited_fds_report_fd_higher();
+  test_close_inherited_fds_report_fd_error();
+  test_setup_report_fd();
+  test_setup_report_fd_error();
   test_setup_seccomp_defaults();
   test_setup_seccomp_allow_unix();
   test_setup_seccomp_allow_network();

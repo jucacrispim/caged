@@ -35,17 +35,21 @@
 
 /*
   Exit status 125 means "caged itself failed": the sandbox could not be built
-  or the command could not be executed. It is distinct from 2 (usage error) and
-  from any status the command returns, so a caller that wraps caged — the tools
-  of llm-bridge, for instance — can tell a broken sandbox from a command that
-  merely exited with 1. 125 is the sh/docker/sudo convention for "the wrapper
-  failed".
+  or the command could not be executed. 2 is the usage error and 125 is the
+  sh/docker/sudo convention for "the wrapper failed".
+
+  Neither status can ever be reserved, though: the command shares them, and a
+  command may legitimately exit with 2 or 125. The proof is --report-fd, the
+  descriptor report_line() writes every diagnostic of ours to (and nothing
+  when the setup succeeded), so a wrapper that passed it never has to guess.
 */
 #define EXIT_SETUP_FAILED 125
 
 /* GCOV_EXCL_START */
-static void die(const char *msg) {
-  fprintf(stderr, "%s: %s\n", msg, strerror(errno));
+static void die(int fd, const char *msg) {
+  char line[512];
+  snprintf(line, sizeof line, "%s: %s", msg, strerror(errno));
+  report_line(fd, line);
   exit(EXIT_SETUP_FAILED);
 }
 /* GCOV_EXCL_STOP */
@@ -68,20 +72,25 @@ int main(int argc, char *argv[]) {
   char **envp = NULL;
   enum caged_return r = caged_setup(&opts, &envp);
   if (r != CAGED_OK) {
+    char line[512];
     if (seccomp_detail < -1) {
       errno = -seccomp_detail;
     }
     if (seccomp_failed_family >= 0) {
-      fprintf(stderr, "caged: socket family %d\n", seccomp_failed_family);
+      snprintf(line, sizeof line, "caged: socket family %d",
+               seccomp_failed_family);
+      report_line(opts.report_fd, line);
     }
     if (seccomp_failed_syscall != NULL) {
-      fprintf(stderr, "caged: syscall %s\n", seccomp_failed_syscall);
+      snprintf(line, sizeof line, "caged: syscall %s", seccomp_failed_syscall);
+      report_line(opts.report_fd, line);
     }
     if (r == CAGED_ERR_ABI_TOO_OLD) {
-      fprintf(stderr, "caged: Landlock ABI %ld, %ld required\n", abi_found,
-              opts.require_abi);
+      snprintf(line, sizeof line, "caged: Landlock ABI %ld, %ld required",
+               abi_found, opts.require_abi);
+      report_line(opts.report_fd, line);
     }
-    die(caged_strreturn(r));
+    die(opts.report_fd, caged_strreturn(r));
   }
 
   /* The library does not print: the warnings about what the kernel ABI
@@ -94,7 +103,7 @@ int main(int argc, char *argv[]) {
   /* execvpe searches for the binary with the *caller's* PATH, not with envp,
      so a cleared environment does not stop "caged -- sh" from finding sh. */
   if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
-    die("error execvpe");
+    die(opts.report_fd, "error execvpe");
   }
   return EXIT_SETUP_FAILED;
 }

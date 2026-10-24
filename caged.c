@@ -335,9 +335,22 @@ static int apply_rlimits(long max_procs) {
 }
 
 /*
-  Closes every file descriptor inherited above stderr.
+  Closes every file descriptor inherited above stderr, except `report_fd` when
+  one was requested: that descriptor is the out-of-band channel the front end
+  reports setup failures through, so it has to survive the sweep. It is marked
+  FD_CLOEXEC by caged_setup, so the command still does not inherit it. The
+  range is therefore split around it (and the empty half is skipped: the
+  kernel rejects a first > last range).
 */
-static int close_inherited_fds(void) { return close_range(3, ~0U, 0); }
+static int close_inherited_fds(int report_fd) {
+  if (report_fd < 3) {
+    return close_range(3, ~0U, 0);
+  }
+  if (report_fd > 3 && close_range(3, (unsigned int)report_fd - 1, 0) < 0) {
+    return -1;
+  }
+  return close_range((unsigned int)report_fd + 1, ~0U, 0);
+}
 
 static long check_abi() {
   return syscall(SYS_landlock_create_ruleset, NULL, 0,
@@ -739,6 +752,8 @@ const char *caged_strreturn(enum caged_return r) {
     return "error setting seccomp thread sync";
   case CAGED_ERR_ENV:
     return "error building the environment";
+  case CAGED_ERR_REPORT_FD:
+    return "error setting the report descriptor";
   }
   return "unknown error";
 }
@@ -752,6 +767,16 @@ const char *caged_strreturn(enum caged_return r) {
 enum caged_return caged_setup(const struct cmd_opts *opts, char ***env) {
   if (env != NULL) {
     *env = NULL;
+  }
+  /*
+    The report descriptor is claimed first: it has to be usable when the
+    setup fails, and FD_CLOEXEC has to be in place before the sweep below
+    keeps it open, so the command it execs never inherits it. A bad
+    descriptor is an error like any other: silently writing nothing would let
+    the caller mistake a broken sandbox for the command's own exit status.
+  */
+  if (opts->report_fd >= 3 && fcntl(opts->report_fd, F_SETFD, FD_CLOEXEC) < 0) {
+    return CAGED_ERR_REPORT_FD;
   }
   if (apply_rlimits(opts->max_procs) < 0) {
     return CAGED_ERR_RLIMIT;
@@ -808,7 +833,7 @@ enum caged_return caged_setup(const struct cmd_opts *opts, char ***env) {
   if (r != CAGED_OK) {
     return r;
   }
-  if (close_inherited_fds() < 0) {
+  if (close_inherited_fds(opts->report_fd) < 0) {
     return CAGED_ERR_CLOSE_FDS;
   }
   /* The environment is the last step so the allowed entries are computed

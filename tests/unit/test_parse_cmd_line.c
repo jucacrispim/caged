@@ -24,6 +24,10 @@
 #include "fake_syscalls.h"
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <stdio.h>
+#include <unistd.h>
 
 void test_ro_only_one_value(void) {
   struct cmd_opts opts = {0};
@@ -756,6 +760,164 @@ void test_restrict_flags_with_ro(void) {
   cmd_opts_free(&opts);
 }
 
+/* --report-fd names the descriptor caged reports its own failures on */
+void test_report_fd(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", "7", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(opts.report_fd == 7);
+
+  cmd_opts_free(&opts);
+}
+
+void test_report_fd_missing_value(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* stdin, stdout and stderr already survive the setup: a report descriptor has
+   to be above them */
+void test_report_fd_too_small(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", "2", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.report_fd == 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_report_fd_invalid(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", "abc", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(opts.report_fd == 0);
+
+  cmd_opts_free(&opts);
+}
+
+void test_report_fd_overflow(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", "99999999999999999999", "--", "true",
+                  NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* a number that does not fit in an int is not a descriptor */
+void test_report_fd_above_int_max(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", "2147483648", "--", "true", NULL};
+
+  assert(parse_cmd_line(5, argv, &opts) < 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* the last value wins, like every other repeatable option */
+void test_report_fd_last_wins(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--report-fd", "4", "--report-fd", "5", "--", "true",
+                  NULL};
+
+  assert(parse_cmd_line(7, argv, &opts) == 0);
+  assert(opts.report_fd == 5);
+
+  cmd_opts_free(&opts);
+}
+
+/* the prescan only looks at the options: a "--report-fd" among the command's
+   own arguments is not one */
+void test_report_fd_after_separator_is_ignored(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--", "sh", "-c", "--report-fd", "7", NULL};
+
+  assert(parse_cmd_line(6, argv, &opts) == 0);
+  assert(opts.report_fd == 0);
+
+  cmd_opts_free(&opts);
+}
+
+/* Silences stderr for a test that expects a diagnostic on it. */
+static int silence_stderr(void) {
+  int saved = dup(STDERR_FILENO);
+  assert(saved >= 0);
+  int devnull = open("/dev/null", O_WRONLY);
+  assert(devnull >= 0);
+  assert(dup2(devnull, STDERR_FILENO) >= 0);
+  close(devnull);
+  return saved;
+}
+
+static void restore_stderr(int saved) {
+  assert(dup2(saved, STDERR_FILENO) >= 0);
+  close(saved);
+}
+
+/* Copies whatever is in the pipe; the write end must be closed first. */
+static void read_pipe(int fd, char *buf, size_t size) {
+  ssize_t n = read(fd, buf, size - 1);
+  assert(n >= 0);
+  buf[n] = '\0';
+}
+
+/* Without a descriptor report_line only writes stderr. */
+void test_report_line_off(void) {
+  int saved = silence_stderr();
+  report_line(0, "off");
+  restore_stderr(saved);
+}
+
+/* A usage error reaches the report descriptor even when the offending argument
+   comes *before* --report-fd: the descriptor is the only unambiguous proof that
+   caged, and not the command, was what failed. */
+void test_report_fd_reports_usage_error_before_the_flag(void) {
+  int fds[2];
+  assert(pipe(fds) == 0);
+  char fd[16];
+  snprintf(fd, sizeof fd, "%d", fds[1]);
+  char *argv[] = {"caged", "--bogus", "--report-fd", fd, NULL};
+  struct cmd_opts opts = {0};
+
+  int saved = silence_stderr();
+  assert(parse_cmd_line(4, argv, &opts) < 0);
+  restore_stderr(saved);
+
+  close(fds[1]);
+  char buf[256];
+  read_pipe(fds[0], buf, sizeof buf);
+  close(fds[0]);
+  assert(strstr(buf, "unknown option") != NULL);
+
+  cmd_opts_free(&opts);
+}
+
+/* The prescan cannot use a value the parser would reject either: with one of
+   those in the command line the diagnostic only goes to stderr. */
+void test_report_fd_prescan_rejects_bad_values(void) {
+  char *bad[][4] = {
+      {"caged", "--bogus", "--report-fd", "abc"},
+      {"caged", "--bogus", "--report-fd", "2"},
+      {"caged", "--bogus", "--report-fd", "2147483648"},
+  };
+  for (size_t k = 0; k < sizeof bad / sizeof bad[0]; k++) {
+    struct cmd_opts opts = {0};
+    int saved = silence_stderr();
+    assert(parse_cmd_line(4, bad[k], &opts) < 0);
+    restore_stderr(saved);
+    assert(opts.report_fd == 0);
+    cmd_opts_free(&opts);
+  }
+}
+
 int main(void) {
   test_ro_only_one_value();
   test_rw_only_one_value();
@@ -815,6 +977,17 @@ int main(void) {
   test_env_empty_name();
   test_env_list_grows();
   test_env_out_of_memory();
+  test_report_fd();
+  test_report_fd_missing_value();
+  test_report_fd_too_small();
+  test_report_fd_invalid();
+  test_report_fd_overflow();
+  test_report_fd_above_int_max();
+  test_report_fd_last_wins();
+  test_report_fd_after_separator_is_ignored();
+  test_report_line_off();
+  test_report_fd_reports_usage_error_before_the_flag();
+  test_report_fd_prescan_rejects_bad_values();
 
   printf("OK\n");
   return 0;

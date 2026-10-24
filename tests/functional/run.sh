@@ -507,6 +507,71 @@ test_inherited_fd_is_closed() {
   check_ne "inherited fd is closed" 0 $?
 }
 
+# --report-fd is the out-of-band channel for caged's own failures. The exit
+# status space is shared with the command (caged execs it), so no status can be
+# reserved: only the descriptor tells the two apart.
+test_report_fd_silent_on_success() {
+  : > "$work/report"
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --report-fd 9 -- true 9>"$work/report" 2>/dev/null
+  rc=$?
+  check "report-fd run succeeds" 0 "$rc"
+  check "report-fd is empty on success" 0 "$(wc -c < "$work/report")"
+}
+
+# the status is the command's, and that is exactly why the descriptor exists:
+# a command that legitimately exits 2 or 125 must not look like a caged failure
+test_report_fd_silent_when_command_exits_like_caged() {
+  for code in 2 125; do
+    : > "$work/report"
+    CAGED_DISABLE_WARNINGS=1 $CAGED $RO --report-fd 9 -- sh -c "exit $code" \
+      9>"$work/report" 2>/dev/null
+    rc=$?
+    check "command exit $code stays the command's own" "$code" "$rc"
+    check "report-fd is empty when only the command failed (exit $code)" 0 \
+      "$(wc -c < "$work/report")"
+  done
+}
+
+test_report_fd_carries_setup_failure() {
+  : > "$work/report"
+  CAGED_DISABLE_WARNINGS=1 $CAGED --ro /no/such/path --report-fd 9 -- true \
+    9>"$work/report" 2>/dev/null
+  rc=$?
+  check "setup failure still exits 125" 125 "$rc"
+  case "$(cat "$work/report")" in
+  *"error allowing read access"*) ok "report-fd carries the setup error" ;;
+  *) bad "report-fd carries the setup error ('$(cat "$work/report")')" ;;
+  esac
+}
+
+# the descriptor is found before the options are parsed, so the mistake does
+# not have to come after --report-fd
+test_report_fd_carries_usage_error() {
+  : > "$work/report"
+  CAGED_DISABLE_WARNINGS=1 $CAGED --report-fd 9 --bogus 9>"$work/report" 2>/dev/null
+  rc=$?
+  check "usage error still exits 2" 2 "$rc"
+  case "$(cat "$work/report")" in
+  *"unknown option"*) ok "report-fd carries the usage error" ;;
+  *) bad "report-fd carries the usage error ('$(cat "$work/report")')" ;;
+  esac
+
+  : > "$work/report"
+  CAGED_DISABLE_WARNINGS=1 $CAGED --bogus --report-fd 9 9>"$work/report" 2>/dev/null
+  check "usage error exits 2 with the flag last" 2 $?
+  case "$(cat "$work/report")" in
+  *"unknown option"*) ok "report-fd is honoured before the flag" ;;
+  *) bad "report-fd is honoured before the flag ('$(cat "$work/report")')" ;;
+  esac
+}
+
+# it is marked close-on-exec: the command never inherits the channel
+test_report_fd_not_inherited() {
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --report-fd 9 -- sh -c 'cat <&9' \
+    9>/dev/null >/dev/null 2>&1
+  check_ne "the command does not inherit the report descriptor" 0 $?
+}
+
 # core dumps would write process memory wherever the confined process points
 # its cwd
 test_core_dump_disabled() {
@@ -712,6 +777,12 @@ main() {
   test_inherited_fd_is_closed
   test_core_dump_disabled
   test_max_procs_set
+
+  test_report_fd_silent_on_success
+  test_report_fd_silent_when_command_exits_like_caged
+  test_report_fd_carries_setup_failure
+  test_report_fd_carries_usage_error
+  test_report_fd_not_inherited
 
   test_ptrace_is_denied
   test_io_uring_is_denied

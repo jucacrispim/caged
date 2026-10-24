@@ -25,6 +25,7 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,9 +50,28 @@ static const struct feature FEATURES[] = {
     {9, "UNIX socket name resolution"},
 };
 
+/*
+  Descriptor the diagnostics of the parse in progress go to (--report-fd).
+  It is found by prescan_report_fd() before the options are walked, so a usage
+  error is reported through it even when the mistake comes first in the command
+  line. 0 means "off".
+*/
+static int report_fd;
+
 static int fatal(const char *msg) {
-  fprintf(stderr, "%s\n", msg);
+  report_line(report_fd, msg);
   return -1;
+}
+
+/*
+  Writes one diagnostic line to stderr and, when fd is a report descriptor
+  (>= 3), to that descriptor too.
+*/
+void report_line(int fd, const char *line) {
+  fprintf(stderr, "%s\n", line);
+  if (fd >= 3) {
+    dprintf(fd, "%s\n", line);
+  }
 }
 
 /* Prints the command usage to the given stream. */
@@ -94,6 +114,8 @@ void print_help(FILE *out) {
       "  --keep-env                     keep the inherited environment\n"
       "  --env NAME=VALUE               set NAME in the command's "
       "environment\n"
+      "  --report-fd N                  report caged's own failures on "
+      "descriptor N (>= 3)\n"
       "  -h, --help                     show this help and exit\n"
       "\n"
       "Environment:\n"
@@ -178,6 +200,34 @@ static int parse_positive(const char *s, long *out) {
 }
 
 /*
+  Finds the --report-fd value before the options are parsed, so a usage error
+  is reported through the descriptor even when the offending argument comes
+  first (`--bogus --report-fd 3`). The last valid occurrence wins, matching the
+  parser. Only the options are scanned: anything after "--" is the command's.
+  Returns 0 (off) when there is no usable value.
+*/
+static int prescan_report_fd(int argc, char *argv[]) {
+  int fd = 0;
+  for (int i = 1; i + 1 < argc; i++) {
+    long v;
+    if (strcmp(argv[i], "--") == 0) {
+      break;
+    }
+    if (strcmp(argv[i], "--report-fd") != 0) {
+      continue;
+    }
+    if (parse_positive(argv[i + 1], &v) < 0) {
+      continue;
+    }
+    if (v < 3 || v > INT_MAX) {
+      continue;
+    }
+    fd = (int)v;
+  }
+  return fd;
+}
+
+/*
   Appends `port` to a dynamic list, growing the backing array (doubling its
   capacity) when it is full. Returns 0 on success, -1 on allocation failure.
 */
@@ -220,6 +270,8 @@ int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
     print_help(stderr);
     return -1;
   }
+  report_fd = prescan_report_fd(argc, argv);
+  opts->report_fd = report_fd;
   int i = 1;
   while (argc > i) {
     if (strcmp(argv[i], "--ro") == 0) {
@@ -281,6 +333,17 @@ int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
       if (parse_positive(argv[i + 1], &opts->require_abi) < 0) {
         return fatal("--require-abi must be a positive number");
       }
+      i += 2;
+    } else if (strcmp(argv[i], "--report-fd") == 0) {
+      long fd;
+      if (i + 1 >= argc) {
+        return fatal("--report-fd must have a value");
+      }
+      if (parse_positive(argv[i + 1], &fd) < 0 || fd < 3 || fd > INT_MAX) {
+        return fatal("--report-fd must be a descriptor number (>= 3)");
+      }
+      opts->report_fd = (int)fd;
+      report_fd = opts->report_fd;
       i += 2;
     } else if (strcmp(argv[i], "--keep-env") == 0) {
       opts->keep_env = 1;

@@ -1,6 +1,36 @@
 Changelog
 =========
 
+v0.5.0
+------
+
+Fifth release. Adds an out-of-band channel for caged's own failures, so a
+wrapper never has to guess from the exit status whether the sandbox applied.
+No policy changed.
+
+Reporting
+~~~~~~~~~
+
+- New ``--report-fd N``: every diagnostic caged prints about itself (usage
+  error, setup failure, command that could not be executed) is also written to
+  descriptor ``N`` (``N >= 3``), and nothing is written there when the setup
+  succeeded. The descriptor is marked ``FD_CLOEXEC`` and it is the only one
+  that survives the final ``close_range``; the command never inherits it.
+- The exit status stays what it was — ``2`` for a usage error, ``125`` for a
+  setup or ``exec`` failure — but it is documented as a hint, not a proof: the
+  command shares the status space with caged and can exit with either number.
+  ``--report-fd`` is what removes the ambiguity.
+
+Tests
+~~~~~
+
+- Functional tests for the descriptor: empty on success and when the command
+  exits with ``2`` or ``125``, carrying the diagnostic for a usage error (with
+  ``--report-fd`` before *or* after the offending option) and for a setup
+  failure, and not inherited by the command.
+- Unit tests for the split ``close_range`` sweep and for a report descriptor
+  that cannot be claimed (``CAGED_ERR_REPORT_FD``).
+
 v0.4.0
 ------
 
