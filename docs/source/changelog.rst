@@ -17,6 +17,18 @@ Exit status
   command that exited with the same number apart. 125 is the convention for
   "the wrapper failed", as used by ``sh``, ``sudo`` and ``docker run``.
 
+Tests
+~~~~~
+
+- New ``make valgrind`` target: memcheck (``--error-exitcode=1``) over every
+  unit binary, one log per binary, so an uninitialised read or a leak fails
+  the build. Out of scope on purpose: the production binary, which ends in
+  ``execve`` or in ``exit`` with the options still on the stack.
+- New ``make sanitize`` target: the same tests under
+  ``-fsanitize=address,undefined`` with ``-fno-sanitize-recover``, catching
+  undefined behaviour memcheck does not model.
+- Both run in CI as their own steps, outside ``make check``.
+
 Upgrading
 ~~~~~~~~~
 

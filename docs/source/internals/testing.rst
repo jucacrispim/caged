@@ -120,6 +120,43 @@ The usual read-only base is ``--ro /usr --ro /bin --ro /lib`` (plus
 ``--ro /lib64 --ro /etc`` when ``python3`` is needed), which is the minimum to
 run ordinary commands.
 
+Memory checks and sanitizers
+----------------------------
+
+Coverage proves that a path ran; it says nothing about whether the path read
+uninitialised memory. Two independent targets close that gap, both compiled
+from the **unit** tests (the production binary is a poor target: it ends in
+``execve``, where valgrind does no leak check at all, or in ``exit`` with the
+option arrays still on ``main``'s stack, so every report would be "still
+reachable").
+
+``make valgrind``
+    Memcheck over every unit binary, ``--error-exitcode=1`` so a report fails
+    the build, one log per binary under ``build/valgrind.*.log``. It catches
+    the class of bug the 100% gate cannot see: an uninitialised read, e.g. a
+    fake ``fstat`` that leaves fields of ``struct stat`` unset while
+    ``allow_access`` branches on them. Leaks counted as errors are
+    ``definite`` and ``indirect`` only, since the glibc environment machinery
+    produces ``possible`` ones by design.
+
+``make sanitize``
+    The same binaries with ``-fsanitize=address,undefined
+    -fno-sanitize-recover=all``, built under ``build/san/``. It overlaps with
+    memcheck but also models undefined behaviour memcheck does not (signed
+    overflow in the capacity arithmetic) and runs an order of magnitude
+    faster.
+
+Two conveniences are deliberate. Valgrind writes to ``--log-file`` and not to
+``--log-fd=2``: ``capture_warnings`` redirects stderr into a pipe and asserts
+that it reads nothing, so a report on fd 2 would break the very test it is
+inspecting. And neither target runs the **functional** suite: with
+``--trace-children`` valgrind re-executes itself inside the sandboxed child,
+which needs ``/proc`` and ``/usr/lib/valgrind`` that the test policy does not
+grant (and the seccomp filter plus ``close_range`` would break it anyway).
+
+Both targets run in CI as their own steps, outside ``make check``: they are a
+different axis from the coverage gate and are slower.
+
 Targets
 -------
 
@@ -129,4 +166,6 @@ Targets
    make functional  # run the integration tests against build/caged
    make test        # unit + functional
    make coverage    # gcovr report; fails below 100%
+   make valgrind    # memcheck over the unit binaries
+   make sanitize    # the unit tests under ASan + UBSan
    make check       # unit + coverage + functional (the full gate)

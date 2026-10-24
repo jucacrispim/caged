@@ -15,12 +15,23 @@ BUILD_DIR   := build
 UNIT        := tests/unit
 COV_DIR     := $(BUILD_DIR)/cov
 COV_CFLAGS  := $(TEST_CFLAGS) --coverage -fcondition-coverage
+SAN_DIR     := $(BUILD_DIR)/san
+SAN_CFLAGS  := $(TEST_CFLAGS) -fsanitize=address,undefined \
+               -fno-sanitize-recover=all -fno-omit-frame-pointer
+VALGRIND    ?= valgrind
+# --error-exitcode turns a report into a build failure (without it valgrind
+# exits with the program's own status and CI passes regardless).
+# --errors-for-leak-kinds is explicit so the "possible" leaks the glibc
+# environment machinery produces do not fail the run.
+VG_FLAGS    := --error-exitcode=1 --leak-check=full --show-leak-kinds=all \
+               --errors-for-leak-kinds=definite,indirect --track-origins=yes
 DOCS_DIR    := docs
 DOCS_VENV   := $(HOME)/.virtualenvs/caged-docs
 
 UNIT_TESTS  := test_abi test_allow_access test_parse_cmd_line test_setup test_net test_help test_seccomp_pfc test_env
 UNIT_BINS   := $(addprefix $(BUILD_DIR)/,$(UNIT_TESTS))
 COV_BINS    := $(addprefix $(COV_DIR)/,$(UNIT_TESTS))
+SAN_BINS    := $(addprefix $(SAN_DIR)/,$(UNIT_TESTS))
 
 # The library (caged.c) and the command-line front end (cli.c) are measured
 # separately: most test binaries include one, the parsing/help/env ones
@@ -33,7 +44,7 @@ COV_SOURCES := --filter 'caged\.c$$' --filter 'cli\.c$$'
 # wants parse_cmd_line / warn_unsupported_features compiles cli.c as well.
 LIB         := $(BUILD_DIR)/libcaged.a
 
-.PHONY: all build lib unit test functional check coverage clean docs docs-env seccomp-dep
+.PHONY: all build lib unit test functional check coverage valgrind sanitize clean docs docs-env seccomp-dep
 
 all: build lib
 
@@ -99,6 +110,42 @@ $(COV_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscall
 $(COV_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
 	mkdir -p $(@D)
 	$(CC) $(COV_CFLAGS) -o $@ $< $(LDLIBS)
+
+# Memcheck over the unit binaries. The production binary is deliberately out of
+# scope: it ends in execve, where valgrind does no leak check at all, or in exit
+# with the option arrays still on main's stack — every report would be "still
+# reachable" and would pressure the code into pointless frees on error paths.
+# The unit binaries drive the whole heap surface instead, 100% of the paths
+# included, and they catch what coverage cannot see: uninitialised reads (a
+# fstat fake that leaves fields of struct stat unset, for instance).
+#
+# --log-file, never --log-fd: capture_warnings() redirects stderr into a pipe
+# and asserts that it reads nothing back, so a report on fd 2 would fail the
+# test it is trying to check. A log file per binary also keeps the reports
+# readable in CI.
+valgrind: $(UNIT_BINS)
+	@set -e; for t in $(UNIT_BINS); do \
+	  echo "== valgrind $$t"; \
+	  $(VALGRIND) $(VG_FLAGS) \
+	    --log-file=$(BUILD_DIR)/valgrind.$$(basename $$t).log $$t; \
+	done
+	@echo "valgrind: no errors"
+
+# The same tests under the compilers' own instrumentation. It overlaps with
+# memcheck but is not a replacement: it catches undefined behaviour memcheck
+# does not model (signed overflow in the capacity arithmetic, for instance) and
+# runs an order of magnitude faster. -fno-sanitize-recover makes every finding
+# fatal, so the target fails instead of printing and carrying on.
+sanitize: $(SAN_BINS)
+	@set -e; for t in $(SAN_BINS); do echo "== $$t"; $$t; done
+
+$(SAN_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c caged.h cli.c cli.h
+	mkdir -p $(@D)
+	$(CC) $(SAN_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(LDLIBS)
+
+$(SAN_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
+	mkdir -p $(@D)
+	$(CC) $(SAN_CFLAGS) -o $@ $< $(LDLIBS)
 
 docs:
 	$(MAKE) -C $(DOCS_DIR) html

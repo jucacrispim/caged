@@ -137,7 +137,8 @@ void test_separator_missing_command_error(void) {
 /* many --ro values: no fixed upper limit, order is preserved */
 void test_many_ro_values(void) {
   struct cmd_opts opts = {0};
-  char *argv[2 * 100 + 3];
+  /* 1 (argv[0]) + 2 * 100 (flag and value) + "--" + "true" + NULL */
+  char *argv[2 * 100 + 4];
   int i = 1;
   argv[0] = "caged";
   for (int k = 0; k < 100; k++) {
@@ -160,7 +161,8 @@ void test_many_ro_values(void) {
 /* many --rw values: no fixed upper limit, order is preserved */
 void test_many_rw_values(void) {
   struct cmd_opts opts = {0};
-  char *argv[2 * 100 + 3];
+  /* 1 (argv[0]) + 2 * 100 (flag and value) + "--" + "true" + NULL */
+  char *argv[2 * 100 + 4];
   int i = 1;
   argv[0] = "caged";
   for (int k = 0; k < 100; k++) {

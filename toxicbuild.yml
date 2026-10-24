@@ -12,6 +12,7 @@ builders:
           - libseccomp-dev
           - python3
           - gcovr
+          - valgrind
 
     steps:
       - name: Build
@@ -19,6 +20,12 @@ builders:
 
       - name: Unit test
         command: make unit
+
+      - name: Memcheck
+        command: make valgrind
+
+      - name: Sanitizers
+        command: make sanitize
 
       - name: Coverage
         command: make coverage
