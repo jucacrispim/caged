@@ -21,6 +21,7 @@
 #define FAKE_SYSCALL_H
 #include <stddef.h>
 #include <stdint.h>
+#include <seccomp.h>
 
 struct open_call {
   const char *path;
@@ -66,6 +67,8 @@ struct fake_context {
   int seccomp_load_ret;
   /* Fail the Nth seccomp_syscall_resolve_name(). 0 resolves all. */
   int seccomp_resolve_fail_at;
+  /* seccomp_attr_set() return value (negative errno) */
+  int seccomp_attr_ret;
 
   /* spies */
   struct open_call last_open;
@@ -91,6 +94,9 @@ struct fake_context {
   uint32_t last_seccomp_action;
   unsigned int last_seccomp_arg_cnt;
   int seccomp_resolve_calls_count;
+  int seccomp_attr_calls_count;
+  enum scmp_filter_attr last_seccomp_attr;
+  uint32_t last_seccomp_attr_value;
 
   /* resource and fd spies */
   int setrlimit_calls_count;

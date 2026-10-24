@@ -356,6 +356,16 @@ globals are the one piece of hidden state in the program; they exist because
 libseccomp returns ``-EINVAL``, ``-EPERM``-style codes instead of ``-1`` plus
 ``errno``.
 
+With ``--tsync`` ``apply_seccomp`` sets ``SCMP_FLTATR_CTL_TSYNC`` on the
+context before loading it, mirroring the Landlock restrict-self flag: the
+filter then covers every thread of the thread group instead of only the
+calling thread and its descendants. The attribute has no ABI gate of its own
+(it needs libseccomp API level 2 / kernel 3.17); when it cannot be set the setup
+fails with ``CAGED_ERR_SECCOMP_TSYNC`` rather than silently installing a
+one-thread filter. Because a partially failed synchronization makes
+``seccomp_load`` return the tid of the offending thread, a *positive* value,
+the load is checked against zero and not against ``-1``.
+
 Two properties make the filter fit here: it is installed **after**
 ``restrict_self`` (no need to pre-declare the syscalls the setup makes, and
 ``no_new_privs`` is already set), and it is inherited across ``execve`` and

@@ -112,6 +112,23 @@ These are bits passed to ``landlock_restrict_self`` itself, not rules:
 caged passes ``opts->restrict_flags & get_supported_restrict_flags(abi)``, so
 flags a given ABI cannot support are dropped rather than failing the run.
 
+``--tsync`` is not Landlock-only: it also sets ``SCMP_FLTATR_CTL_TSYNC`` on the
+seccomp context, so both layers reach the same threads. What makes seccomp a
+problem in the first place is that ``seccomp_load`` filters the calling thread,
+and inheritance only goes downwards, so threads that already exist in the
+thread group would keep running unfiltered. Two differences from Landlock are
+worth knowing: the seccomp attribute has no ABI gate (it needs libseccomp API
+level 2 / kernel 3.17, and if unavailable the setup fails with
+``CAGED_ERR_SECCOMP_TSYNC``), and a failed synchronization makes
+``seccomp_load`` return the tid of the offending thread — a *positive* value —
+instead of ``-1``, which is why the load is checked against zero.
+
+Neither layer can reach a sibling **process** (another thread group, from a
+``fork``): a domain only descends the tree of descendants. Confining those is
+the caller's job — apply the sandbox before forking, as ``caged`` itself does
+in ``main``.
+
+
 System V IPC
 ------------
 

@@ -747,6 +747,62 @@ void test_setup_seccomp_load_error(void) {
   assert(fake.seccomp_release_calls_count == 1);
 }
 
+/* --tsync also reaches the seccomp layer: the TSYNC attribute is set on the
+   context, so the filter lands on every thread of the thread group */
+void test_setup_seccomp_tsync(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+  opts.restrict_flags = LANDLOCK_RESTRICT_SELF_TSYNC;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.seccomp_attr_calls_count == 1);
+  assert(fake.last_seccomp_attr == SCMP_FLTATR_CTL_TSYNC);
+  assert(fake.last_seccomp_attr_value == 1);
+  assert(fake.seccomp_load_calls_count == 1);
+  assert(fake.seccomp_release_calls_count == 1);
+}
+
+/* without --tsync the attribute is never touched */
+void test_setup_seccomp_no_tsync(void) {
+  setup_reaches_seccomp();
+
+  struct cmd_opts opts = {0};
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.seccomp_attr_calls_count == 0);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* the attribute cannot be set: no libseccomp API level 2 or kernel < 3.17 */
+void test_setup_seccomp_tsync_error(void) {
+  setup_reaches_seccomp();
+  fake.seccomp_attr_ret = -EINVAL;
+
+  struct cmd_opts opts = {0};
+  opts.restrict_flags = LANDLOCK_RESTRICT_SELF_TSYNC;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_TSYNC);
+  assert(seccomp_detail == -EINVAL);
+  assert(fake.seccomp_rule_calls_count == 0);
+  assert(fake.seccomp_load_calls_count == 0);
+  assert(fake.seccomp_release_calls_count == 1);
+}
+
+/* a failed synchronization returns the tid of the offending thread, a
+   positive value: it must not be mistaken for success */
+void test_setup_seccomp_load_tid(void) {
+  setup_reaches_seccomp();
+  fake.seccomp_load_ret = 1234;
+
+  struct cmd_opts opts = {0};
+  opts.restrict_flags = LANDLOCK_RESTRICT_SELF_TSYNC;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_LOAD);
+  assert(fake.seccomp_load_calls_count == 1);
+  assert(fake.seccomp_release_calls_count == 1);
+}
+
 /* test if every  return code have a message */
 void test_strreturn(void) {
   enum caged_return codes[] = {
@@ -770,6 +826,7 @@ void test_strreturn(void) {
       CAGED_ERR_SECCOMP_SYSVIPC,
       CAGED_ERR_SECCOMP_SYSCALLS,
       CAGED_ERR_SECCOMP_LOAD,
+      CAGED_ERR_SECCOMP_TSYNC,
       CAGED_ERR_ENV,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
@@ -911,6 +968,10 @@ int main(void) {
   test_setup_seccomp_syscalls_last_error();
   test_setup_seccomp_syscalls_resolve_error();
   test_setup_seccomp_load_error();
+  test_setup_seccomp_tsync();
+  test_setup_seccomp_no_tsync();
+  test_setup_seccomp_tsync_error();
+  test_setup_seccomp_load_tid();
   test_strreturn();
   test_strreturn_unknown_error();
   test_warn_none_when_all_supported();

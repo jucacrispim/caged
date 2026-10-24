@@ -263,6 +263,20 @@ int __wrap_seccomp_rule_add_exact(scmp_filter_ctx ctx, uint32_t action,
   return fake.seccomp_rule_ret;
 }
 
+/* Only the TSYNC attribute is set by caged; the spy records what was asked
+   for so the test can check the flag reaches libseccomp. */
+int __wrap_seccomp_attr_set(scmp_filter_ctx ctx, enum scmp_filter_attr attr,
+                            uint32_t value) {
+  (void)ctx;
+  fake.seccomp_attr_calls_count++;
+  fake.last_seccomp_attr = attr;
+  fake.last_seccomp_attr_value = value;
+  if (fake.seccomp_attr_ret < 0) {
+    errno = -fake.seccomp_attr_ret;
+  }
+  return fake.seccomp_attr_ret;
+}
+
 int __wrap_seccomp_load(scmp_filter_ctx ctx) {
   if (ctx == NULL) {
     return -EINVAL;

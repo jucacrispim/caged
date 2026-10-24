@@ -36,6 +36,14 @@ Library split and documentation updates.
 - The unit tests still include ``caged.c`` (and ``cli.c`` where needed) to
   reach the ``static`` helpers. Coverage stays at 100%
   line/branch/decision/function, now measured over ``caged.c`` and ``cli.c``.
+- ``--tsync`` now reaches the seccomp layer as well: ``apply_seccomp`` sets
+  ``SCMP_FLTATR_CTL_TSYNC`` on the context, so the filter is applied to every
+  thread of the thread group instead of only to the calling thread and its
+  children. The attribute needs no Landlock ABI, so it works even on kernels
+  too old for the restrict-self ``TSYNC`` bit. New return code
+  ``CAGED_ERR_SECCOMP_TSYNC`` when it cannot be set, and the load result is now
+  checked against zero because a failed synchronization returns the tid of the
+  offending thread instead of ``-1``.
 
 v0.2.0
 ------

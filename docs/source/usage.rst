@@ -201,6 +201,18 @@ Thread sync
     one. Added in ABI 8; required for correctness if the process is
     multi-threaded.
 
+    The flag governs both layers: the Landlock restrict-self bit (ABI 8) and
+    the seccomp ``SCMP_FLTATR_CTL_TSYNC`` attribute, which needs only
+    libseccomp API level 2 / kernel 3.17 and is therefore applied even on a
+    kernel too old for the Landlock bit. Without it, seccomp reaches only the
+    calling thread and whatever it goes on to create; threads that already
+    existed in the thread group stay unfiltered.
+
+    Note that this is *thread* synchronization: a process forked from another
+    branch (another thread group) cannot be confined after the fact. Apply the
+    sandbox before forking instead — ``caged`` itself does the setup before
+    ``execvp``.
+
 File descriptors and resource limits
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 

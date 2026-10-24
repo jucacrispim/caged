@@ -629,10 +629,17 @@ static int deny_dangerous_syscalls(scmp_filter_ctx ctx) {
 
 /*
   Builds and loads the seccomp filter.
+
+  `tsync` mirrors the Landlock restrict-self flag of the same name: the filter
+  is then applied to every thread of the thread group, not only to the calling
+  one. Without it a thread that already exists (a sibling) keeps running
+  unfiltered; a process forked from another branch is out of reach either way.
+  Calling seccomp_load with the flag set can return the tid of a thread that
+  failed to synchronize instead of -1, so the load is checked against 0.
 */
 static enum caged_return apply_seccomp(int allow_unix_sockets,
                                        int allow_network_sockets,
-                                       int allow_sysv_ipc) {
+                                       int allow_sysv_ipc, int tsync) {
   scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
 
   seccomp_detail = 0;
@@ -640,6 +647,15 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
   seccomp_failed_syscall = NULL;
   if (ctx == NULL) {
     return CAGED_ERR_SECCOMP_INIT;
+  }
+  int r = 0;
+  if (tsync) {
+    r = seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
+    if (r < 0) {
+      seccomp_detail = r;
+      seccomp_release(ctx);
+      return CAGED_ERR_SECCOMP_TSYNC;
+    }
   }
   if (deny_socket_families(ctx) < 0) {
     seccomp_release(ctx);
@@ -669,7 +685,7 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
     seccomp_release(ctx);
     return CAGED_ERR_SECCOMP_SYSCALLS;
   }
-  if (seccomp_load(ctx) < 0) {
+  if (seccomp_load(ctx) != 0) {
     seccomp_release(ctx);
     return CAGED_ERR_SECCOMP_LOAD;
   }
@@ -719,6 +735,8 @@ const char *caged_strreturn(enum caged_return r) {
     return "error denying dangerous syscalls";
   case CAGED_ERR_SECCOMP_LOAD:
     return "error loading seccomp filter";
+  case CAGED_ERR_SECCOMP_TSYNC:
+    return "error setting seccomp thread sync";
   case CAGED_ERR_ENV:
     return "error building the environment";
   }
@@ -785,7 +803,8 @@ enum caged_return caged_setup(const struct cmd_opts *opts, char ***env) {
   close(ruleset);
   enum caged_return r =
       apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets,
-                    opts->allow_sysv_ipc);
+                    opts->allow_sysv_ipc,
+                    (opts->restrict_flags & LANDLOCK_RESTRICT_SELF_TSYNC) != 0);
   if (r != CAGED_OK) {
     return r;
   }

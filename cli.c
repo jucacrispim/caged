@@ -84,7 +84,7 @@ void print_help(FILE *out) {
       "  --log-subdomains-off           no audit log for subdomains (ABI >= "
       "7)\n"
       "  --tsync                        apply the sandbox to all threads "
-      "(ABI >= 8)\n"
+      "(Landlock: ABI >= 8)\n"
       "  --allow-unix-sockets           allow AF_UNIX sockets (IPC)\n"
       "  --allow-network-sockets        allow AF_INET, AF_INET6, AF_NETLINK\n"
       "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"

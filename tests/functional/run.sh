@@ -602,6 +602,13 @@ test_restrict_flags_accepted() {
   check "restrict-self flags are accepted" 0 $?
 }
 
+# --tsync reaches the seccomp layer too: the filter is loaded with the TSYNC
+# attribute, and if the kernel refused it the setup would fail with exit 1.
+test_tsync_applies_seccomp() {
+  out=$(socket_probe "--tsync" "socket.socket(socket.AF_INET, socket.SOCK_DGRAM)")
+  check "--tsync keeps the seccomp filter in force" 13 "$out"
+}
+
 # on an old kernel stderr carries the warnings; on a recent enough kernel
 # there is simply nothing to warn about (both are fine)
 test_warnings_printed_by_default() {
@@ -717,6 +724,7 @@ main() {
   test_env_flag_overrides_without_duplicating
 
   test_restrict_flags_accepted
+  test_tsync_applies_seccomp
 
   test_warnings_printed_by_default
   test_require_abi_unmet_exits_1
