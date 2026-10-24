@@ -1,57 +1,92 @@
 Changelog
 =========
 
-Unreleased
-----------
+v0.3.0
+------
 
-Library split and documentation updates.
+Third release. Splits the single translation unit into a library and a
+command-line front end, so caged can be embedded in another program to wrap a
+whole client process at launch. No command-line option changed and the exit
+codes are the same: 2 for a usage error, 1 for a setup or exec failure.
 
-- ``make lib`` builds ``build/libcaged.a`` from ``caged.o`` (``caged.c``
-  alone, no parser and no ``main``), so caged can be embedded in another
-  program. ``make`` now builds both the binary and the library. The new
-  :doc:`library` page documents the API, the command-line option each
-  ``struct cmd_opts`` field mirrors, the one-way side effects of
-  ``caged_setup``, the environment out-parameter, ``TSYNC`` for
-  multi-threaded callers and the diagnostics globals.
+Library
+~~~~~~~
 
-- The single translation unit is now five files, along a library /
-  command-line boundary: ``caged.h`` (public interface — ``enum caged_return``,
-  ``struct cmd_opts``, the diagnostics globals and the ``caged_setup`` /
-  ``caged_strreturn`` / ``cmd_opts_free`` declarations), ``caged.c`` (the
-  sandbox logic, nothing else), ``cli.h`` / ``cli.c`` (argument parsing, usage
-  text, ABI warnings and the command environment) and ``main.c`` (the ``die``
-  and ``main`` front end).
-- ``caged_setup``, ``caged_strreturn`` and ``cmd_opts_free`` are the library
-  API; ``parse_cmd_line``, ``print_help``, ``build_env`` and
-  ``warn_unsupported_features`` are declared in ``cli.h``. The diagnostics
-  globals (``seccomp_detail``, ``seccomp_failed_family``,
-  ``seccomp_failed_syscall``, ``abi_found``) are ``extern`` and declared in
-  ``caged.h``. All other helpers stay ``static``.
-- The library no longer writes to ``stderr``: the ABI warnings moved out of
-  ``caged_setup`` and are printed by ``main``, which is the only piece that
-  knows about the terminal. The wording and the ``CAGED_DISABLE_WARNINGS``
-  switch are unchanged.
-- The ``LANDLOCK_*`` fallback macros moved to ``caged.h``, since both
-  ``caged.c`` and ``cli.c`` need them.
-- The environment moved into the library: ``build_env`` and ``BASE_ENV`` live
-  in ``caged.c``, and ``caged_setup`` gained a ``char ***env`` out-parameter.
-  On success it also replaces the process environment (anything outside the
-  base set, ``--keep-env`` and ``--env`` is unset), so a child started with
-  ``execvp`` inherits the filtered set. New return code
-  ``CAGED_ERR_ENV`` when the array cannot be allocated.
-- ``CAGED_DISABLE_WARNINGS`` is read before the environment is replaced and
-  kept in ``caged_warnings_disabled``, so the switch still works.
-- The unit tests still include ``caged.c`` (and ``cli.c`` where needed) to
+- ``caged.h`` is the public interface: ``enum caged_return``,
+  ``struct cmd_opts``, the diagnostics globals (``seccomp_detail``,
+  ``seccomp_failed_family``, ``seccomp_failed_syscall``, ``abi_found``), the
+  ``caged_setup`` / ``caged_strreturn`` / ``cmd_opts_free`` declarations and
+  the ``LANDLOCK_*`` fallback macros an older system's headers lack.
+- ``caged.c`` holds the sandbox and only that: it parses no arguments and
+  never writes to ``stderr``, so it links into another program cleanly. Every
+  helper outside the API stays ``static``.
+- ``cli.h`` / ``cli.c`` take the front end — ``parse_cmd_line``,
+  ``print_help`` and ``warn_unsupported_features`` — while ``main.c`` holds
+  ``die`` and ``main``.
+- ``make lib`` builds ``build/libcaged.a`` from ``caged.o``; plain ``make``
+  now produces the archive together with the binary, and ``make build`` /
+  ``make lib`` still select a single one.
+- The ABI warnings left ``caged_setup``: the library records the ABI in
+  ``abi_found`` and the front end decides whether, when and in which format to
+  report the gap. The wording and ``CAGED_DISABLE_WARNINGS=1`` are unchanged.
+
+Environment
+~~~~~~~~~~~
+
+- ``build_env`` and ``BASE_ENV`` moved from the front end into the library, so
+  an embedder also filters the environment of whatever it execs.
+- ``caged_setup`` gained a ``char ***env`` out-parameter and now replaces the
+  process environment itself as its last step (``clearenv`` plus a ``setenv``
+  per allowed entry). A ``NULL`` out-parameter still replaces ``environ``, it
+  just does not hand the array back; the caller owns the array and frees it.
+- New return code ``CAGED_ERR_ENV`` when the array cannot be allocated.
+- ``CAGED_DISABLE_WARNINGS`` is not part of the inherited base set, so it is
+  read before the replacement and recorded in ``caged_warnings_disabled``;
+  ``warn_unsupported_features`` checks that flag instead of ``getenv``, and the
+  switch keeps working after the setup.
+
+Seccomp
+~~~~~~~
+
+- ``--tsync`` now reaches both layers. Besides the Landlock restrict-self bit
+  (ABI 8), ``apply_seccomp`` sets ``SCMP_FLTATR_CTL_TSYNC``, so the filter is
+  applied to every thread of the thread group instead of only to the calling
+  thread and its children. The attribute has no Landlock ABI gate — it needs
+  libseccomp API level 2 / kernel 3.17 — so it works even on kernels too old
+  for the restrict-self bit.
+- New return code ``CAGED_ERR_SECCOMP_TSYNC`` when the attribute cannot be
+  set: the setup fails rather than installing a one-thread filter in silence.
+- The ``seccomp_load`` result is checked against zero instead of ``-1``,
+  because a failed synchronization returns the tid of the offending thread, a
+  positive value.
+
+Tests and documentation
+~~~~~~~~~~~~~~~~~~~~~~~
+
+- The unit tests keep including ``caged.c`` (and ``cli.c`` where needed) to
   reach the ``static`` helpers. Coverage stays at 100%
   line/branch/decision/function, now measured over ``caged.c`` and ``cli.c``.
-- ``--tsync`` now reaches the seccomp layer as well: ``apply_seccomp`` sets
-  ``SCMP_FLTATR_CTL_TSYNC`` on the context, so the filter is applied to every
-  thread of the thread group instead of only to the calling thread and its
-  children. The attribute needs no Landlock ABI, so it works even on kernels
-  too old for the restrict-self ``TSYNC`` bit. New return code
-  ``CAGED_ERR_SECCOMP_TSYNC`` when it cannot be set, and the load result is now
-  checked against zero because a failed synchronization returns the tid of the
-  offending thread instead of ``-1``.
+- New unit tests for the environment replacement, the ``NULL``
+  out-parameter, ``CAGED_ERR_ENV`` and the warning switch; ``strndup`` is
+  wrapped so the copy failure can be exercised.
+- New unit tests for the seccomp TSYNC attribute: set only with ``--tsync``,
+  what happens when it cannot be set, and the positive tid a failed
+  synchronization returns.
+- The functional suite gained a ``--tsync`` case, 75 cases now, checking that
+  the socket filter is still in force with the flag.
+- New :doc:`library` page on embedding caged: the API, the command-line option
+  each ``struct cmd_opts`` field mirrors, the one-way side effects of
+  ``caged_setup``, the environment out-parameter, ``TSYNC`` for multi-threaded
+  callers and the diagnostics globals.
+
+Upgrading
+~~~~~~~~~
+
+- ``caged_setup`` now takes a second argument, the optional ``char ***env``
+  out-parameter, and replaces ``environ`` instead of leaving it alone.
+- A run with ``--tsync`` fails on a kernel or libseccomp too old to
+  synchronize the seccomp filter, where it used to confine only the calling
+  thread (through the Landlock bit alone, when the ABI had it).
 
 v0.2.0
 ------
