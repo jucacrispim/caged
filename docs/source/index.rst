@@ -47,6 +47,11 @@ Features
 .. toctree::
    :maxdepth: 2
 
+   library
+
+.. toctree::
+   :maxdepth: 2
+
    internals/index
 
 .. toctree::

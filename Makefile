@@ -27,11 +27,26 @@ COV_BINS    := $(addprefix $(COV_DIR)/,$(UNIT_TESTS))
 # include both.
 COV_SOURCES := --filter 'caged\.c$$' --filter 'cli\.c$$'
 
-.PHONY: all build unit test functional check coverage clean docs docs-env seccomp-dep
+# The library form: caged.o is the sandbox and only that (no parser, no main),
+# so a consumer that wants to embed the sandbox links libcaged.a and includes
+# caged.h. The command-line front end is not part of it; a consumer that also
+# wants parse_cmd_line / warn_unsupported_features compiles cli.c as well.
+LIB         := $(BUILD_DIR)/libcaged.a
 
-all: build
+.PHONY: all build lib unit test functional check coverage clean docs docs-env seccomp-dep
+
+all: build lib
 
 build: seccomp-dep $(BUILD_DIR)/caged
+
+lib: seccomp-dep $(LIB)
+
+$(BUILD_DIR)/caged.o: caged.c caged.h
+	mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c -o $@ caged.c
+
+$(LIB): $(BUILD_DIR)/caged.o
+	$(AR) rcs $@ $<
 
 # Fails early with an actionable message instead of a linker error.  Checks
 # what actually matters: that the compiler can see <seccomp.h>.

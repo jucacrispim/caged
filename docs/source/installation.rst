@@ -21,8 +21,12 @@ Then run:
 
    make
 
-This builds the ``caged`` binary in ``build/caged``. There is no install step;
-just copy the binary to your $PATH.
+This builds the ``caged`` binary in ``build/caged`` and the static library
+``build/libcaged.a`` (see :doc:`library` for embedding caged in another
+program). There is no install step; just copy the binary to your $PATH.
+
+To build only one of them, ``make build`` (the binary) and ``make lib`` (the
+library) are available separately.
 
 
 Building the documentation

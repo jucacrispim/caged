@@ -6,6 +6,14 @@ Unreleased
 
 Library split and documentation updates.
 
+- ``make lib`` builds ``build/libcaged.a`` from ``caged.o`` (``caged.c``
+  alone, no parser and no ``main``), so caged can be embedded in another
+  program. ``make`` now builds both the binary and the library. The new
+  :doc:`library` page documents the API, the command-line option each
+  ``struct cmd_opts`` field mirrors, the one-way side effects of
+  ``caged_setup``, the environment out-parameter, ``TSYNC`` for
+  multi-threaded callers and the diagnostics globals.
+
 - The single translation unit is now five files, along a library /
   command-line boundary: ``caged.h`` (public interface — ``enum caged_return``,
   ``struct cmd_opts``, the diagnostics globals and the ``caged_setup`` /
