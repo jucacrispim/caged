@@ -25,6 +25,15 @@ VALGRIND    ?= valgrind
 # environment machinery produces do not fail the run.
 VG_FLAGS    := --error-exitcode=1 --leak-check=full --show-leak-kinds=all \
                --errors-for-leak-kinds=definite,indirect --track-origins=yes
+# Valgrind creates its log file privately (a temp file next to it, then a
+# rename) and gives up when RLIMIT_NOFILE is absurdly high: "Private file
+# creation failed. The current file descriptor limit is 1073741804." That is
+# what Docker hands out when the host runs with no limit (fs.nr_open inherited
+# as the soft limit), so the default breaks inside containers even though it
+# works on a desktop. Lowering a soft limit needs no privilege, so the target
+# does it in a subshell — the limit dies with it and the other make targets are
+# unaffected. 1024 fds is far more than the unit binaries need.
+VG_NOFILE   ?= 1024
 DOCS_DIR    := docs
 DOCS_VENV   := $(HOME)/.virtualenvs/caged-docs
 
@@ -126,8 +135,9 @@ $(COV_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
 valgrind: $(UNIT_BINS)
 	@set -e; for t in $(UNIT_BINS); do \
 	  echo "== valgrind $$t"; \
-	  $(VALGRIND) $(VG_FLAGS) \
-	    --log-file=$(BUILD_DIR)/valgrind.$$(basename $$t).log $$t; \
+	  ( ulimit -n $(VG_NOFILE); \
+	    $(VALGRIND) $(VG_FLAGS) \
+	      --log-file=$(BUILD_DIR)/valgrind.$$(basename $$t).log $$t ); \
 	done
 	@echo "valgrind: no errors"
 
