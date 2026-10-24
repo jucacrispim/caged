@@ -18,9 +18,9 @@
 */
 
 /*
-  Command-line front end: argument parsing, usage text, ABI warnings and the
-  command's environment. None of this is part of the sandbox; caged.c holds
-  the library.
+  Command-line front end: argument parsing, usage text and ABI warnings.
+  None of this is part of the sandbox; caged.c holds the library, the
+  environment included.
 */
 
 #define _GNU_SOURCE
@@ -31,31 +31,6 @@
 #include <unistd.h>
 
 #include "cli.h"
-
-/*
-  Environment variables that will be inherited by default.
-*/
-static const char *BASE_ENV[] = {
-    "PATH",
-    "HOME",
-    "LANG",
-    "LANGUAGE",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LC_NUMERIC",
-    "LC_TIME",
-    "LC_COLLATE",
-    "LC_MONETARY",
-    "LC_MESSAGES",
-    "LC_PAPER",
-    "LC_NAME",
-    "LC_ADDRESS",
-    "LC_TELEPHONE",
-    "LC_MEASUREMENT",
-    "LC_IDENTIFICATION",
-};
-
-#define BASE_ENV_N (sizeof BASE_ENV / sizeof BASE_ENV[0])
 
 /* These feature stuff are used by the warning messages about
    landlock features not supported by the hosts ABI
@@ -133,8 +108,7 @@ void print_help(FILE *out) {
   available.
 */
 void warn_unsupported_features(long abi) {
-  const char *disable = getenv("CAGED_DISABLE_WARNINGS");
-  if (disable != NULL && strcmp(disable, "1") == 0) {
+  if (caged_warnings_disabled) {
     return;
   }
   size_t n = sizeof FEATURES / sizeof FEATURES[0];
@@ -239,69 +213,6 @@ static int push_env(char ***list, int *n, int *cap, const char *entry) {
   }
   (*list)[(*n)++] = (char *)entry;
   return 0;
-}
-
-/* Length of the NAME part of a NAME=VALUE entry. */
-static size_t env_name_len(const char *entry) {
-  const char *eq = strchr(entry, '=');
-  return eq == NULL ? strlen(entry) : (size_t)(eq - entry);
-}
-
-/* True when `entry`'s name is exactly the `name_len` bytes of `name`. */
-static int env_same_name(const char *entry, const char *name, size_t name_len) {
-  return env_name_len(entry) == name_len && strncmp(entry, name, name_len) == 0;
-}
-
-/* True when `entry` is one of the variables inherited by default. */
-static int env_is_base(const char *entry) {
-  for (size_t k = 0; k < BASE_ENV_N; k++) {
-    if (env_same_name(entry, BASE_ENV[k], strlen(BASE_ENV[k]))) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-static int env_overridden(const char *entry, const struct cmd_opts *opts) {
-  for (int k = 0; k < opts->n_env; k++) {
-    if (env_same_name(entry, opts->env[k], env_name_len(opts->env[k]))) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-/*
-  Builds the environment variables. The default base, or
-  everything inherited with --keep-env and the --env values.
-  Returns a NULL-terminated array, or NULL on allocation failure.
-*/
-char **build_env(const struct cmd_opts *opts) {
-  char **env = NULL;
-  int n = 0;
-  int cap = 0;
-  int failed = 0;
-
-  if (environ != NULL) {
-    for (char **e = environ; *e != NULL; e++) {
-      if (!opts->keep_env && !env_is_base(*e)) {
-        continue;
-      }
-      if (env_overridden(*e, opts)) {
-        continue;
-      }
-      failed |= push_env(&env, &n, &cap, *e) < 0;
-    }
-  }
-  for (int k = 0; k < opts->n_env; k++) {
-    failed |= push_env(&env, &n, &cap, opts->env[k]) < 0;
-  }
-  failed |= push_env(&env, &n, &cap, NULL) < 0;
-  if (failed) {
-    free(env);
-    return NULL;
-  }
-  return env;
 }
 
 int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {

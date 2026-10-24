@@ -581,6 +581,22 @@ void test_env_empty_name(void) {
   cmd_opts_free(&opts);
 }
 
+/* the --env list grows by doubling: the second push over a full capacity
+   takes the *cap * 2 branch */
+void test_env_list_grows(void) {
+  struct cmd_opts opts = {0};
+  char *argv[] = {"caged", "--env", "A=1", "--env", "B=2", "--env", "C=3",
+                  "--env", "D=4", "--env", "E=5", "--", "true", NULL};
+
+  assert(parse_cmd_line(13, argv, &opts) == 0);
+  assert(opts.n_env == 5);
+  assert(opts.cap_env >= 5);
+  assert(strcmp(opts.env[0], "A=1") == 0);
+  assert(strcmp(opts.env[4], "E=5") == 0);
+
+  cmd_opts_free(&opts);
+}
+
 /* allocation failure while growing the --env list -> error */
 void test_env_out_of_memory(void) {
   struct cmd_opts opts = {0};
@@ -795,6 +811,7 @@ int main(void) {
   test_env_missing_value();
   test_env_missing_equals();
   test_env_empty_name();
+  test_env_list_grows();
   test_env_out_of_memory();
 
   printf("OK\n");

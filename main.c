@@ -55,7 +55,8 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  enum caged_return r = caged_setup(&opts);
+  char **envp = NULL;
+  enum caged_return r = caged_setup(&opts, &envp);
   if (r != CAGED_OK) {
     if (seccomp_detail < -1) {
       errno = -seccomp_detail;
@@ -74,14 +75,11 @@ int main(int argc, char *argv[]) {
   }
 
   /* The library does not print: the warnings about what the kernel ABI
-     cannot support are the front end's job, on the successful path only. */
+     cannot support are the front end's job, on the successful path only.
+     caged_setup already replaced environ, so it recorded the
+     CAGED_DISABLE_WARNINGS switch before doing that. */
   warn_unsupported_features(abi_found);
 
-  char **envp = build_env(&opts);
-  if (envp == NULL) {
-    cmd_opts_free(&opts);
-    die("error building environment");
-  }
   cmd_opts_free(&opts);
   /* execvpe searches for the binary with the *caller's* PATH, not with envp,
      so a cleared environment does not stop "caged -- sh" from finding sh. */

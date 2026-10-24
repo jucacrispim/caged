@@ -47,6 +47,8 @@ struct fake_context {
   int prctl_err;
   int fail_realloc;
   int realloc_err;
+  int fail_strndup;
+  int strndup_err;
 
   int setrlimit_ret;
   int setrlimit_err;

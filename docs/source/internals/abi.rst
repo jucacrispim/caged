@@ -96,3 +96,9 @@ The warnings belong to the command-line front end, not to the library:
 ``warn_unsupported_features`` with the ABI ``caged_setup`` recorded in
 ``abi_found``, so a program embedding caged decides for itself whether to
 report the gap, and in which format.
+
+``caged_setup`` replaces the process environment at the end, and
+``CAGED_DISABLE_WARNINGS`` is not part of the inherited base set. The switch
+is therefore read before the replacement and recorded in
+``caged_warnings_disabled``; ``warn_unsupported_features`` checks that flag,
+so ``CAGED_DISABLE_WARNINGS=1`` keeps working after the setup.

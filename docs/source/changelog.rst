@@ -25,6 +25,14 @@ Library split and documentation updates.
   switch are unchanged.
 - The ``LANDLOCK_*`` fallback macros moved to ``caged.h``, since both
   ``caged.c`` and ``cli.c`` need them.
+- The environment moved into the library: ``build_env`` and ``BASE_ENV`` live
+  in ``caged.c``, and ``caged_setup`` gained a ``char ***env`` out-parameter.
+  On success it also replaces the process environment (anything outside the
+  base set, ``--keep-env`` and ``--env`` is unset), so a child started with
+  ``execvp`` inherits the filtered set. New return code
+  ``CAGED_ERR_ENV`` when the array cannot be allocated.
+- ``CAGED_DISABLE_WARNINGS`` is read before the environment is replaced and
+  kept in ``caged_warnings_disabled``, so the switch still works.
 - The unit tests still include ``caged.c`` (and ``cli.c`` where needed) to
   reach the ``static`` helpers. Coverage stays at 100%
   line/branch/decision/function, now measured over ``caged.c`` and ``cli.c``.

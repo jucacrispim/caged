@@ -76,6 +76,7 @@ enum caged_return {
   CAGED_ERR_SECCOMP_SYSVIPC,
   CAGED_ERR_SECCOMP_SYSCALLS,
   CAGED_ERR_SECCOMP_LOAD,
+  CAGED_ERR_ENV,
 };
 
 struct cmd_opts {
@@ -121,14 +122,32 @@ extern int seccomp_failed_family;
 extern const char *seccomp_failed_syscall;
 extern long abi_found;
 
+/*
+  Whether the caller asked for the ABI warnings to be silenced
+  (CAGED_DISABLE_WARNINGS=1). caged_setup reads the switch before it replaces
+  the environment, so the front end can still honour it afterwards.
+*/
+extern int caged_warnings_disabled;
+
 /* Human-readable message for a return code. */
 const char *caged_strreturn(enum caged_return r);
 
 /*
   Creates the sandbox. If the return is not CAGED_OK the process must be
   terminated with an error; use caged_strreturn for a sane message.
+
+  On success the sandbox is enforced (Landlock, seccomp, resource limits and
+  the inherited descriptors are closed) and the process environment is
+  replaced with the allowed one: the inherited variables kept by the opts
+  (the base set, or everything with keep_env) plus the env entries. Anything
+  else is unset from the calling process.
+
+  When `env` is not NULL, *env receives the new environment as a
+  NULL-terminated array; pass it to execvpe (execvp and friends use the
+  already-filtered environ). The caller owns the array and frees it with
+  free(). Whatever happens before the end of the setup, *env is set to NULL.
 */
-enum caged_return caged_setup(const struct cmd_opts *opts);
+enum caged_return caged_setup(const struct cmd_opts *opts, char ***env);
 
 /* Releases the memory held by the lists of a cmd_opts. */
 void cmd_opts_free(struct cmd_opts *opts);
@@ -143,12 +162,5 @@ int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts);
 
 /* Prints the command usage to the given stream. */
 void print_help(FILE *out);
-
-/*
-  Builds the environment variables for the command: the default base, or
-  everything inherited with --keep-env, plus the --env values. Returns a
-  NULL-terminated array, or NULL on allocation failure.
-*/
-char **build_env(const struct cmd_opts *opts);
 
 #endif

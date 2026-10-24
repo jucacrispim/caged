@@ -21,6 +21,7 @@ Layout
        test_setup.c           caged_setup, caged_strreturn, ABI warnings
        test_net.c             push_port, parse_port, net rules
        test_help.c            print_help, --help / -h, no-args
+       test_env.c             environment base/keep/override, replace_environ
      functional/
        run.sh                 integration against the kernel
 
@@ -53,8 +54,8 @@ functions are disjoint, so there is no collision.
 
 The kernel is replaced with the linker's ``--wrap`` facility: every call to a
 wrapped symbol becomes a ``__wrap_*`` stub, and the real one stays available as
-``__real_*``. caged wraps ``syscall``, ``open``, ``fstat``, ``close``, ``prctl``
-and ``realloc``.
+``__real_*``. caged wraps ``syscall``, ``open``, ``fstat``, ``close``, ``prctl``,
+``realloc`` and ``strndup``.
 
 Because the compiler and libc like to rewrite calls to builtins, the tests
 compile with ``-O0 -U_FORTIFY_SOURCE -fno-builtin`` — without these the wraps

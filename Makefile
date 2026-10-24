@@ -4,7 +4,7 @@ CFLAGS      := -Wall -Wextra -g
 # nothing for pkg-config to discover beyond the library name itself.
 LDLIBS      := -lseccomp
 TEST_CFLAGS := $(CFLAGS) -O0 -U_FORTIFY_SOURCE -fno-builtin
-WRAP        := -Wl,--wrap=syscall -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=close -Wl,--wrap=prctl -Wl,--wrap=realloc \
+WRAP        := -Wl,--wrap=syscall -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=close -Wl,--wrap=prctl -Wl,--wrap=realloc -Wl,--wrap=strndup \
                -Wl,--wrap=setrlimit -Wl,--wrap=close_range
 SECCOMP_WRAP := -Wl,--wrap=seccomp_init -Wl,--wrap=seccomp_rule_add_exact \
                 -Wl,--wrap=seccomp_load -Wl,--wrap=seccomp_release \

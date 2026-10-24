@@ -19,10 +19,9 @@ caged is split in five files, along a library / command-line boundary:
     here.
 
 ``cli.h`` / ``cli.c``
-    The command-line front end proper: ``parse_cmd_line``, ``print_help``,
-    ``build_env`` and the ABI warnings, plus the ``push_*`` list helpers and
-    the ``BASE_ENV`` table they are built from. None of it is part of the
-    sandbox.
+    The command-line front end proper: ``parse_cmd_line``, ``print_help`` and
+    the ABI warnings, plus the ``push_*`` list helpers the parser uses. None
+    of it is part of the sandbox.
 
 ``main.c``
     The executable: ``die`` and ``main``. It parses ``argv``, calls
@@ -99,7 +98,8 @@ Main and the testable core
        return 0;
      }
 
-     enum caged_return r = caged_setup(&opts);
+     char **envp = NULL;
+     enum caged_return r = caged_setup(&opts, &envp);
      if (r != CAGED_OK) {
        if (seccomp_detail < -1) {
          errno = -seccomp_detail;
@@ -117,11 +117,7 @@ Main and the testable core
        die(caged_strreturn(r));
      }
 
-     char **envp = build_env(&opts);
-     if (envp == NULL) {
-       cmd_opts_free(&opts);
-       die("error building environment");
-     }
+     warn_unsupported_features(abi_found);
      cmd_opts_free(&opts);
      /* execvpe searches with the *caller's* PATH, not with envp. */
      if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
@@ -243,10 +239,15 @@ write to stderr after the fact.
 The command environment
 ----------------------
 
-``build_env`` (in ``cli.c``) runs in ``main``, after the sandbox is in place,
-and returns the ``NULL``-terminated array handed to ``execvpe``. It is
-deliberately outside
-``main`` so it can be unit tested: the environment is built from three pieces.
+The environment is built by ``build_env`` and handed back through the last
+parameter of ``caged_setup``, which also **replaces** the process environment
+(``clearenv`` plus a ``setenv`` per allowed entry). From the end of the setup
+on, ``environ`` itself holds only the allowed variables, so a child started
+with ``execvp`` or with the returned array gets the same filtered set. A
+caller that passes ``NULL`` still gets the replacement, it just does not get
+the array.
+
+The environment is computed from three pieces.
 
 ``BASE_ENV``
     The variables inherited by default: ``PATH``, ``HOME``, ``LANG``,
@@ -265,8 +266,14 @@ deliberately outside
     so ``--env FOO=new`` replaces an inherited ``FOO=old`` and leaves
     ``FOOBAR`` untouched; the pushed entry is the only copy that survives.
 
-Two details are easy to get wrong. ``environ`` is ``NULL`` after ``clearenv()``
-(which the unit tests use), so the loop guards against it. And ``execvpe``
+Three details are easy to get wrong. The allowed entries point into the
+inherited ``environ``, so the array must be built **before** ``clearenv()``
+invalidates it — hence the environment is the last step of the setup. The
+``CAGED_DISABLE_WARNINGS`` switch is read at that same moment, before the
+replacement, and recorded in ``caged_warnings_disabled``; otherwise dropping
+it would make the switch impossible to use. And ``environ`` is ``NULL`` after
+``clearenv()`` (which the unit tests use), so the loop guards against it.
+``execvpe``
 searches for the program with the **caller's** ``PATH``, not with the array it
 is handed — a cleared environment does not stop ``caged -- sh`` from finding
 ``sh``; what changes is the ``PATH`` the command itself sees.
@@ -370,7 +377,8 @@ consumer of ``caged.c`` as its own translation unit.
 The original motivation for the split was to embed caged in another program to
 wrap a whole client process at launch. ``caged_setup`` plus ``struct cmd_opts``
 in ``caged.h`` is the interface for that: fill the struct, call
-``caged_setup``, and treat a non-``CAGED_OK`` return as fatal for the caller.
+``caged_setup``, treat a non-``CAGED_OK`` return as fatal for the caller, and
+hand the returned environment to the ``exec``.
 
 Two cleanups also belong to this line of work. ``apply_seccomp`` currently
 builds and installs the filter in one go; separating a side-effect-free

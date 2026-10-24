@@ -115,6 +115,17 @@ void *__wrap_realloc(void *ptr, size_t size) {
   return __real_realloc(ptr, size);
 }
 
+extern char *__real_strndup(const char *s, size_t n);
+
+/* only fails when the test asks for it; otherwise delegates to the real one */
+char *__wrap_strndup(const char *s, size_t n) {
+  if (fake.fail_strndup) {
+    errno = fake.strndup_err;
+    return NULL;
+  }
+  return __real_strndup(s, n);
+}
+
 int __wrap_open(const char *path, int flags, ...) {
   /* caged uses O_PATH on open. If it is not used, return the real stuff*/
   if (!(flags & O_PATH)) {
