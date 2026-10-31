@@ -1,6 +1,61 @@
 Changelog
 =========
 
+v0.6.0
+------
+
+Sixth release. No behaviour change: it is the type and consistency pass that
+the new lint gate enforces. No command-line option changed and no policy
+changed.
+
+Types
+~~~~~
+
+- Every Landlock mask is now ``unsigned long long``, the width the API uses
+  (``__u64`` fields, ``1ULL`` constants): ``get_handled_access_fs``,
+  ``get_perms_read_write``, ``get_handled_scopes``, ``get_handled_access_net``
+  and ``get_supported_restrict_flags``, plus the ``restrict_self`` and
+  ``add_net_rule`` parameters. The narrower locals compiled cleanly only while
+  every right fit in 32 bits; the day the kernel adds a right past bit 31 they
+  would have truncated the mask in silence, leaving the ruleset governing less
+  than intended.
+- The three raw ``syscall()`` wrappers (``create_ruleset``, ``add_rule``,
+  ``restrict_self``) return ``long``, the actual ``syscall(3)`` result, and the
+  ``allow_*`` helpers propagate it. The ruleset descriptor is narrowed to
+  ``int`` once, after the error check.
+- ``SCMP_A0`` receives the socket family as ``scmp_datum_t``, the comparison
+  type, instead of narrowing it to ``int``.
+
+Internal naming
+~~~~~~~~~~~~~~~
+
+- ``get_supported_scopes`` became ``get_handled_scopes``, matching
+  ``get_handled_access_fs`` and ``get_handled_access_net``.
+
+Lint
+~~~~
+
+- New ``make lint`` target: ``gcc -fsyntax-only -Wconversion
+  -Wsign-conversion -Werror`` over ``caged.c``, ``cli.c`` and ``main.c``, run as
+  the first step of the CI build. ``-Wall -Wextra`` had let every implicit
+  narrowing above through.
+
+Documentation
+~~~~~~~~~~~~~
+
+- The internals pages follow the new names and types: ``abi.rst`` (the gating
+  snippet and why the masks are 64-bit wide), ``architecture.rst`` (the
+  ``struct cmd_opts`` listing) and ``rules.rst``.
+
+Upgrading
+~~~~~~~~~
+
+- ``struct cmd_opts`` grew: ``released_scopes``, ``released_net`` and
+  ``restrict_flags`` are ``unsigned long long`` instead of ``unsigned long``.
+  An embedder that fills them from the ``1ULL`` macros needs no change; one
+  that keeps them in an ``unsigned long`` of its own sees a conversion warning
+  on a 32-bit build.
+
 v0.5.0
 ------
 
