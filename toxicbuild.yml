@@ -15,6 +15,9 @@ builders:
           - valgrind
 
     steps:
+      - name: Lint
+        command: make lint
+
       - name: Build
         command: make build
 

@@ -53,7 +53,15 @@ COV_SOURCES := --filter 'caged\.c$$' --filter 'cli\.c$$'
 # wants parse_cmd_line / warn_unsupported_features compiles cli.c as well.
 LIB         := $(BUILD_DIR)/libcaged.a
 
-.PHONY: all build lib unit test functional check coverage valgrind sanitize clean docs docs-env seccomp-dep
+# Implicit conversion linter. The flag set is deliberately strict and treats
+# the findings as errors: the point is to break the build while the Landlock
+# masks (unsigned long long) are still stored in int variables, so the fix
+# cannot be forgotten. Only syntax is checked — nothing is compiled.
+LINT_CFLAGS := -fsyntax-only -Wconversion -Wsign-conversion \
+               -Werror=conversion -Werror=sign-conversion
+LINT_SOURCES := caged.c cli.c main.c
+
+.PHONY: all build lib lint unit test functional check coverage valgrind sanitize clean docs docs-env seccomp-dep
 
 all: build lib
 
@@ -67,6 +75,13 @@ $(BUILD_DIR)/caged.o: caged.c caged.h
 
 $(LIB): $(BUILD_DIR)/caged.o
 	$(AR) rcs $@ $<
+
+# Reports narrowing/&sign conversions that -Wall -Wextra let through, e.g.
+# `int handled = FS_HANDLED;` or returning syscall()'s long as int.
+lint: seccomp-dep
+	@set -e; for f in $(LINT_SOURCES); do echo "== lint $$f"; \
+	  $(CC) $(CFLAGS) $(LINT_CFLAGS) $$f; done
+	@echo "lint: no implicit conversion warnings"
 
 # Fails early with an actionable message instead of a linker error.  Checks
 # what actually matters: that the compiler can see <seccomp.h>.
