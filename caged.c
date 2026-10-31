@@ -308,7 +308,7 @@ static long add_rule(int ruleset_fd,
 }
 
 /* Locks the current process and its children to the rules added up to point */
-static long restrict_self(int ruleset_fd, unsigned long flags) {
+static long restrict_self(int ruleset_fd, unsigned long long flags) {
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
     return -1;
   }
@@ -402,8 +402,8 @@ static unsigned long long get_perms_read_write(long abi) {
   Returns the scopes restricted by default and supported by the abi version
   available on the host. Scopes were added in ABI 6.
 */
-static unsigned long get_handled_scopes(long abi) {
-  unsigned long scopes = SCOPED;
+static unsigned long long get_handled_scopes(long abi) {
+  unsigned long long scopes = SCOPED;
   if (abi < 6) {
     scopes = 0;
   }
@@ -426,8 +426,8 @@ static unsigned long long get_handled_access_net(long abi) {
   Returns the restrict-self flags supported by the abi version available on
   the host. The log flags were added in ABI 7 and TSYNC in ABI 8.
 */
-static unsigned long get_supported_restrict_flags(long abi) {
-  unsigned long flags = RESTRICT_FLAGS;
+static unsigned long long get_supported_restrict_flags(long abi) {
+  unsigned long long flags = RESTRICT_FLAGS;
   if (abi < 7) {
     flags &= ~(LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
                LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
@@ -479,7 +479,7 @@ static long allow_read_write_access(int ruleset_fd, const char *path, long abi) 
 }
 
 /* Adds a net rule granting the given access for a single port. */
-static long add_net_rule(int ruleset_fd, unsigned long allowed_access,
+static long add_net_rule(int ruleset_fd, unsigned long long allowed_access,
                          unsigned short port) {
   struct landlock_net_port_attr attr = {
       .allowed_access = allowed_access,

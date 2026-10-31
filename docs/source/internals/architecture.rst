@@ -177,9 +177,9 @@ so there is no fixed upper bound:
    struct cmd_opts {
      const char **r_dir;      int n_r;   int cap_r;
      const char **rw_dir;     int n_rw;  int cap_rw;
-     unsigned long released_scopes;
-     unsigned long released_net;
-     unsigned long restrict_flags;
+     unsigned long long released_scopes;
+     unsigned long long released_net;
+     unsigned long long restrict_flags;
      unsigned short *connect_ports; int n_connect; int cap_connect;
      unsigned short *bind_ports;    int n_bind;    int cap_bind;
      int allow_unix_sockets;

@@ -88,9 +88,9 @@ struct cmd_opts {
   const char **rw_dir;
   int n_rw;
   int cap_rw;
-  unsigned long released_scopes;
-  unsigned long released_net;
-  unsigned long restrict_flags;
+  unsigned long long released_scopes;
+  unsigned long long released_net;
+  unsigned long long restrict_flags;
   unsigned short *connect_ports;
   int n_connect;
   int cap_connect;
