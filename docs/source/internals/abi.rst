@@ -50,7 +50,7 @@ same subtract-by-ABI pattern is used by:
 
 - ``get_perms_read_write`` — drops ``TRUNCATE`` (ABI < 3) and
   ``RESOLVE_UNIX`` (ABI < 9).
-- ``get_supported_scopes`` — zero below ABI 6.
+- ``get_handled_scopes`` — zero below ABI 6.
 - ``get_handled_access_net`` — zero below ABI 4.
 - ``get_supported_restrict_flags`` — drops the log flags below ABI 7 and
   ``TSYNC`` below ABI 8.

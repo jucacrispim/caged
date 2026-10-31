@@ -402,7 +402,7 @@ static int get_perms_read_write(long abi) {
   Returns the scopes restricted by default and supported by the abi version
   available on the host. Scopes were added in ABI 6.
 */
-static unsigned long get_supported_scopes(long abi) {
+static unsigned long get_handled_scopes(long abi) {
   unsigned long scopes = SCOPED;
   if (abi < 6) {
     scopes = 0;
@@ -795,7 +795,7 @@ enum caged_return caged_setup(const struct cmd_opts *opts, char ***env) {
   struct landlock_ruleset_attr r_perm = {
       .handled_access_fs = handled,
       .handled_access_net = (unsigned long)handled_net & ~opts->released_net,
-      .scoped = get_supported_scopes(abi) & ~opts->released_scopes,
+      .scoped = get_handled_scopes(abi) & ~opts->released_scopes,
   };
   int ruleset = create_ruleset(&r_perm);
   if (ruleset < 0) {

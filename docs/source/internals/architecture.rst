@@ -59,7 +59,7 @@ The setup is a one-way funnel:
    ``CAGED_ERR_ABI_TOO_OLD`` before any ruleset exists. Without the option the
    floor is ``0`` and the step is a no-op, leaving only the warning.
 4. **Compute the handled masks** for this ABI (``get_handled_access_fs``,
-   ``get_handled_access_net``, ``get_supported_scopes``) and fill
+   ``get_handled_access_net``, ``get_handled_scopes``) and fill
    ``struct landlock_ruleset_attr``.
 5. **Create the ruleset** (``create_ruleset``).
 6. **Add rules** — one ``PATH_BENEATH`` rule per path, one ``NET_PORT`` rule

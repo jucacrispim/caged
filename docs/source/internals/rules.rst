@@ -92,7 +92,7 @@ domains (ABI 6). caged restricts both scopes by default:
   sockets outside the domain.
 
 Releasing a scope clears its bit from the ruleset's ``scoped`` mask
-(``get_supported_scopes(abi) & ~opts->released_scopes``). Unlike filesystem and
+(``get_handled_scopes(abi) & ~opts->released_scopes``). Unlike filesystem and
 network rights, scopes have **no per-object rule**: ``landlock_add_rule`` does
 not support them. Below ABI 6 the mask is simply zero.
 
