@@ -34,8 +34,8 @@ Every feature mask starts as "everything the latest API offers" and then
 
 .. code-block:: c
 
-   static int get_handled_access_fs(long abi) {
-     int handled = FS_HANDLED;
+   static unsigned long long get_handled_access_fs(long abi) {
+     unsigned long long handled = FS_HANDLED;
      if (abi < 2) handled &= ~LANDLOCK_ACCESS_FS_REFER;
      if (abi < 3) handled &= ~LANDLOCK_ACCESS_FS_TRUNCATE;
      if (abi < 5) handled &= ~LANDLOCK_ACCESS_FS_IOCTL_DEV;

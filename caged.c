@@ -293,7 +293,7 @@ static void replace_environ(char **env) {
   By default it denies permission for all the handled acesses.
   The handled accesses are held by the *attr pointer
 */
-static int create_ruleset(const struct landlock_ruleset_attr *attr) {
+static long create_ruleset(const struct landlock_ruleset_attr *attr) {
   return syscall(SYS_landlock_create_ruleset, attr,
                  sizeof(struct landlock_ruleset_attr), 0);
 }
@@ -301,14 +301,14 @@ static int create_ruleset(const struct landlock_ruleset_attr *attr) {
 /* Adds an exception (grants access) on the ruleset for the given acesses.
    The accesses for the grants are held by the *pb pointer
  */
-static int add_rule(int ruleset_fd,
-                    const struct landlock_path_beneath_attr *pb) {
+static long add_rule(int ruleset_fd,
+                     const struct landlock_path_beneath_attr *pb) {
   return syscall(SYS_landlock_add_rule, ruleset_fd, LANDLOCK_RULE_PATH_BENEATH,
                  pb, 0);
 }
 
 /* Locks the current process and its children to the rules added up to point */
-static int restrict_self(int ruleset_fd, unsigned long flags) {
+static long restrict_self(int ruleset_fd, unsigned long flags) {
   if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
     return -1;
   }
@@ -370,8 +370,8 @@ static int abi_satisfies(long abi, long require) {
   Returns the handled fs accesses supported by the abi version available on
   the host
 */
-static int get_handled_access_fs(long abi) {
-  int handled = FS_HANDLED;
+static unsigned long long get_handled_access_fs(long abi) {
+  unsigned long long handled = FS_HANDLED;
   if (abi < 2) {
     handled &= ~LANDLOCK_ACCESS_FS_REFER;
   }
@@ -387,8 +387,8 @@ static int get_handled_access_fs(long abi) {
   return handled;
 }
 
-static int get_perms_read_write(long abi) {
-  int perms = PERMS_READ_WRITE;
+static unsigned long long get_perms_read_write(long abi) {
+  unsigned long long perms = PERMS_READ_WRITE;
   if (abi < 3) {
     perms &= ~LANDLOCK_ACCESS_FS_TRUNCATE;
   }
@@ -414,8 +414,8 @@ static unsigned long get_handled_scopes(long abi) {
   Returns the net accesses supported by the abi version available on the host.
   Net accesses were added in ABI 4.
 */
-static int get_handled_access_net(long abi) {
-  int handled = NET_HANDLED;
+static unsigned long long get_handled_access_net(long abi) {
+  unsigned long long handled = NET_HANDLED;
   if (abi < 4) {
     handled = 0;
   }
@@ -440,9 +440,9 @@ static unsigned long get_supported_restrict_flags(long abi) {
 }
 
 /* Grant some kind of access for a given path */
-static int allow_access(int ruleset_fd, const char *path,
-                        struct landlock_path_beneath_attr *pb) {
-  int r;
+static long allow_access(int ruleset_fd, const char *path,
+                         struct landlock_path_beneath_attr *pb) {
+  long r;
   int parent_fd;
   struct stat st;
 
@@ -465,22 +465,22 @@ static int allow_access(int ruleset_fd, const char *path,
 }
 
 /* Grant read access for a given path */
-static int allow_read_access(int ruleset_fd, const char *path) {
+static long allow_read_access(int ruleset_fd, const char *path) {
   struct landlock_path_beneath_attr pb = {.allowed_access = PERMS_READ};
 
   return allow_access(ruleset_fd, path, &pb);
 }
 
 /* Grant read and write access for a give path */
-static int allow_read_write_access(int ruleset_fd, const char *path, long abi) {
-  int perms = get_perms_read_write(abi);
-  struct landlock_path_beneath_attr pb = {.allowed_access = perms};
+static long allow_read_write_access(int ruleset_fd, const char *path, long abi) {
+  struct landlock_path_beneath_attr pb = {
+      .allowed_access = get_perms_read_write(abi)};
   return allow_access(ruleset_fd, path, &pb);
 }
 
 /* Adds a net rule granting the given access for a single port. */
-static int add_net_rule(int ruleset_fd, unsigned long allowed_access,
-                        unsigned short port) {
+static long add_net_rule(int ruleset_fd, unsigned long allowed_access,
+                         unsigned short port) {
   struct landlock_net_port_attr attr = {
       .allowed_access = allowed_access,
       .port = port,
@@ -490,12 +490,12 @@ static int add_net_rule(int ruleset_fd, unsigned long allowed_access,
 }
 
 /* Grant the ability to connect to the given port. */
-static int allow_net_connect_access(int ruleset_fd, unsigned short port) {
+static long allow_net_connect_access(int ruleset_fd, unsigned short port) {
   return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_CONNECT_TCP, port);
 }
 
 /* Grant the ability to bind the given port. */
-static int allow_net_bind_access(int ruleset_fd, unsigned short port) {
+static long allow_net_bind_access(int ruleset_fd, unsigned short port) {
   return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_BIND_TCP, port);
 }
 
@@ -511,7 +511,7 @@ static int deny_socket_families(scmp_filter_ctx ctx) {
       continue;
     }
     r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                               SCMP_A0(SCMP_CMP_EQ, f));
+                               SCMP_A0(SCMP_CMP_EQ, (scmp_datum_t)f));
     if (r < 0) {
       seccomp_detail = r;
       seccomp_failed_family = f;
@@ -790,17 +790,21 @@ enum caged_return caged_setup(const struct cmd_opts *opts, char ***env) {
     errno = ENOTSUP;
     return CAGED_ERR_ABI_TOO_OLD;
   }
-  int handled = get_handled_access_fs(abi);
-  int handled_net = get_handled_access_net(abi);
+  unsigned long long handled = get_handled_access_fs(abi);
+  unsigned long long handled_net = get_handled_access_net(abi);
   struct landlock_ruleset_attr r_perm = {
       .handled_access_fs = handled,
-      .handled_access_net = (unsigned long)handled_net & ~opts->released_net,
+      .handled_access_net = handled_net & ~opts->released_net,
       .scoped = get_handled_scopes(abi) & ~opts->released_scopes,
   };
-  int ruleset = create_ruleset(&r_perm);
-  if (ruleset < 0) {
+  /* create_ruleset reports the raw syscall result, a long. The descriptor
+     itself is an int (as is parent_fd in the landlock structs), so the
+     narrowing is explicit and happens once, after the error check. */
+  long ruleset_ret = create_ruleset(&r_perm);
+  if (ruleset_ret < 0) {
     return CAGED_ERR_CREATE_RULESET;
   }
+  int ruleset = (int)ruleset_ret;
   for (int k = 0; k < opts->n_r; k++) {
     if (allow_read_access(ruleset, opts->r_dir[k]) < 0) {
       return CAGED_ERR_READ_ACCESS;
