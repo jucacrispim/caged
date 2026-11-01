@@ -57,8 +57,9 @@ static void die(int fd, const char *msg) {
 /* GCOV_EXCL_START */
 int main(int argc, char *argv[]) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
 
-  if (parse_cmd_line(argc, argv, &opts) < 0) {
+  if (parse_cmd_line(argc, argv, &opts, &cmd) < 0) {
     caged_opts_free(&opts);
     return 2;
   }
@@ -102,7 +103,7 @@ int main(int argc, char *argv[]) {
   caged_opts_free(&opts);
   /* execvpe searches for the binary with the *caller's* PATH, not with envp,
      so a cleared environment does not stop "caged -- sh" from finding sh. */
-  if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
+  if (execvpe(cmd[0], cmd, envp) < 0) {
     die(opts.report_fd, "error execvpe");
   }
   return EXIT_SETUP_FAILED;

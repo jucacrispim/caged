@@ -265,7 +265,11 @@ static int push_env(char ***list, int *n, int *cap, const char *entry) {
   return 0;
 }
 
-int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts) {
+int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
+                   char ***cmd) {
+  if (cmd != NULL) {
+    *cmd = NULL;
+  }
   if (argc <= 1) {
     print_help(stderr);
     return -1;
@@ -411,7 +415,9 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts) {
         return fatal("missing command after --");
       }
       i++;
-      opts->cmd = &argv[i];
+      if (cmd != NULL) {
+        *cmd = &argv[i];
+      }
       return 0;
     } else {
       return fatal("unknown option (use --help)");

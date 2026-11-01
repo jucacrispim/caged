@@ -31,55 +31,59 @@
 
 void test_ro_only_one_value(void) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
   char *argv[] = {"caged", "--ro", "/usr", "--", "cat", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, &cmd) == 0);
   assert(opts.n_r == 1);
   assert(opts.n_rw == 0);
   assert(strcmp(opts.r_dir[0], "/usr") == 0);
-  assert(strcmp(opts.cmd[0], "cat") == 0);
+  assert(strcmp(cmd[0], "cat") == 0);
 
   caged_opts_free(&opts);
 }
 
 void test_rw_only_one_value(void) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
   char *argv[] = {"caged", "--rw", "/tmp/x", "--", "sh", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, &cmd) == 0);
   assert(opts.n_r == 0);
   assert(opts.n_rw == 1);
   assert(strcmp(opts.rw_dir[0], "/tmp/x") == 0);
-  assert(strcmp(opts.cmd[0], "sh") == 0);
+  assert(strcmp(cmd[0], "sh") == 0);
 
   caged_opts_free(&opts);
 }
 
 void test_rw_ro_multiple_values(void) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
   char *argv[] = {"caged", "--ro", "/a", "--rw", "/b",  "--ro",
                   "/c",    "--rw", "/d", "--",   "cmd", NULL};
 
-  assert(parse_cmd_line(15, argv, &opts) == 0);
+  assert(parse_cmd_line(15, argv, &opts, &cmd) == 0);
   assert(opts.n_r == 2);
   assert(opts.n_rw == 2);
   assert(strcmp(opts.r_dir[0], "/a") == 0);
   assert(strcmp(opts.r_dir[1], "/c") == 0);
   assert(strcmp(opts.rw_dir[0], "/b") == 0);
   assert(strcmp(opts.rw_dir[1], "/d") == 0);
-  assert(strcmp(opts.cmd[0], "cmd") == 0);
+  assert(strcmp(cmd[0], "cmd") == 0);
 
   caged_opts_free(&opts);
 }
 
 void test_only_command_opt(void) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
   char *argv[] = {"caged", "--", "/usr/bin/ls", "-la", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, &cmd) == 0);
   assert(opts.n_r == 0);
-  assert(strcmp(opts.cmd[0], "/usr/bin/ls") == 0);
-  assert(strcmp(opts.cmd[1], "-la") == 0);
+  assert(strcmp(cmd[0], "/usr/bin/ls") == 0);
+  assert(strcmp(cmd[1], "-la") == 0);
 
   caged_opts_free(&opts);
 }
@@ -88,7 +92,7 @@ void test_missing_params_error(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", NULL};
 
-  assert(parse_cmd_line(1, argv, &opts) < 0);
+  assert(parse_cmd_line(1, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -97,7 +101,7 @@ void test_missing_ro_value_error(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--ro", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -106,7 +110,7 @@ void test_missing_rw_value_error(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--rw", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -115,7 +119,7 @@ void test_bad_param_error(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--bogus", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -124,7 +128,7 @@ void test_sem_missing_command_error(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--ro", "/usr", NULL};
 
-  assert(parse_cmd_line(3, argv, &opts) < 0);
+  assert(parse_cmd_line(3, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -133,7 +137,7 @@ void test_separator_missing_command_error(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -141,6 +145,7 @@ void test_separator_missing_command_error(void) {
 /* many --ro values: no fixed upper limit, order is preserved */
 void test_many_ro_values(void) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
   /* 1 (argv[0]) + 2 * 100 (flag and value) + "--" + "true" + NULL */
   char *argv[2 * 100 + 4];
   int i = 1;
@@ -153,11 +158,11 @@ void test_many_ro_values(void) {
   argv[i++] = "true";
   argv[i] = NULL;
 
-  assert(parse_cmd_line(i, argv, &opts) == 0);
+  assert(parse_cmd_line(i, argv, &opts, &cmd) == 0);
   assert(opts.n_r == 100);
   assert(strcmp(opts.r_dir[0], "/x") == 0);
   assert(strcmp(opts.r_dir[99], "/x") == 0);
-  assert(strcmp(opts.cmd[0], "true") == 0);
+  assert(strcmp(cmd[0], "true") == 0);
 
   caged_opts_free(&opts);
 }
@@ -165,6 +170,7 @@ void test_many_ro_values(void) {
 /* many --rw values: no fixed upper limit, order is preserved */
 void test_many_rw_values(void) {
   struct caged_opts opts = {0};
+  char **cmd = NULL;
   /* 1 (argv[0]) + 2 * 100 (flag and value) + "--" + "true" + NULL */
   char *argv[2 * 100 + 4];
   int i = 1;
@@ -177,11 +183,11 @@ void test_many_rw_values(void) {
   argv[i++] = "true";
   argv[i] = NULL;
 
-  assert(parse_cmd_line(i, argv, &opts) == 0);
+  assert(parse_cmd_line(i, argv, &opts, &cmd) == 0);
   assert(opts.n_rw == 100);
   assert(strcmp(opts.rw_dir[0], "/y") == 0);
   assert(strcmp(opts.rw_dir[99], "/y") == 0);
-  assert(strcmp(opts.cmd[0], "true") == 0);
+  assert(strcmp(cmd[0], "true") == 0);
 
   caged_opts_free(&opts);
 }
@@ -196,7 +202,7 @@ void test_ro_out_of_memory(void) {
   fake.realloc_err = ENOMEM;
 
   errno = 0;
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_r == 0);
   assert(errno == ENOMEM);
 
@@ -213,7 +219,7 @@ void test_rw_out_of_memory(void) {
   fake.realloc_err = ENOMEM;
 
   errno = 0;
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_rw == 0);
   assert(errno == ENOMEM);
 
@@ -226,7 +232,7 @@ void test_allow_scoped_signal(void) {
   char *argv[] = {"caged", "--allow-scoped-signal", "--", "true", NULL};
 
   reset_fake();
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.released_scopes == LANDLOCK_SCOPE_SIGNAL);
 
   caged_opts_free(&opts);
@@ -238,7 +244,7 @@ void test_allow_scoped_abstract_unix(void) {
   char *argv[] = {"caged", "--allow-scoped-abstract-unix", "--", "true", NULL};
 
   reset_fake();
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.released_scopes == LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET);
 
   caged_opts_free(&opts);
@@ -251,7 +257,7 @@ void test_allow_scoped_combined(void) {
                   "--allow-scoped-signal", "--", "true", NULL};
 
   reset_fake();
-  assert(parse_cmd_line(7, argv, &opts) == 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) == 0);
   assert(opts.n_r == 1);
   assert(strcmp(opts.r_dir[0], "/usr") == 0);
   assert(opts.released_scopes ==
@@ -265,7 +271,7 @@ void test_allow_connect_tcp(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-connect-tcp", "--", "true", NULL};
 
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.released_net == LANDLOCK_ACCESS_NET_CONNECT_TCP);
 
   caged_opts_free(&opts);
@@ -276,7 +282,7 @@ void test_allow_bind_tcp(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-bind-tcp", "--", "true", NULL};
 
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.released_net == LANDLOCK_ACCESS_NET_BIND_TCP);
 
   caged_opts_free(&opts);
@@ -288,7 +294,7 @@ void test_allow_connect_port(void) {
   char *argv[] = {"caged",           "--allow-connect-port", "443",
                   "--allow-connect-port", "80", "--", "true", NULL};
 
-  assert(parse_cmd_line(9, argv, &opts) == 0);
+  assert(parse_cmd_line(9, argv, &opts, NULL) == 0);
   assert(opts.n_connect == 2);
   assert(opts.connect_ports[0] == 443);
   assert(opts.connect_ports[1] == 80);
@@ -302,7 +308,7 @@ void test_allow_bind_port(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-bind-port", "0", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) == 0);
   assert(opts.n_bind == 1);
   assert(opts.bind_ports[0] == 0);
 
@@ -323,7 +329,7 @@ void test_allow_net_combined(void) {
                   "true",
                   NULL};
 
-  assert(parse_cmd_line(10, argv, &opts) == 0);
+  assert(parse_cmd_line(10, argv, &opts, NULL) == 0);
   assert(opts.n_connect == 1);
   assert(opts.n_bind == 1);
   assert(opts.n_r == 1);
@@ -336,7 +342,7 @@ void test_allow_connect_port_missing_value(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-connect-port", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -345,7 +351,7 @@ void test_allow_bind_port_missing_value(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-bind-port", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -354,7 +360,7 @@ void test_allow_connect_port_invalid(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-connect-port", "abc", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -363,7 +369,7 @@ void test_allow_bind_port_invalid(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-bind-port", "70000", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -374,7 +380,7 @@ void test_allow_connect_conflict(void) {
   char *argv[] = {"caged",     "--allow-connect-tcp", "--allow-connect-port",
                   "443", "--", "true", NULL};
 
-  assert(parse_cmd_line(7, argv, &opts) < 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -385,7 +391,7 @@ void test_allow_connect_conflict_reverse(void) {
   char *argv[] = {"caged",     "--allow-connect-port", "443",
                   "--allow-connect-tcp", "--", "true", NULL};
 
-  assert(parse_cmd_line(7, argv, &opts) < 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -396,7 +402,7 @@ void test_allow_bind_conflict(void) {
   char *argv[] = {"caged",     "--allow-bind-tcp", "--allow-bind-port",
                   "80", "--", "true", NULL};
 
-  assert(parse_cmd_line(7, argv, &opts) < 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -406,7 +412,7 @@ void test_allow_bind_conflict_reverse(void) {
   char *argv[] = {"caged",     "--allow-bind-port", "80",
                   "--allow-bind-tcp", "--", "true", NULL};
 
-  assert(parse_cmd_line(7, argv, &opts) < 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -421,7 +427,7 @@ void test_connect_port_out_of_memory(void) {
   fake.realloc_err = ENOMEM;
 
   errno = 0;
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_connect == 0);
   assert(errno == ENOMEM);
 
@@ -438,7 +444,7 @@ void test_bind_port_out_of_memory(void) {
   fake.realloc_err = ENOMEM;
 
   errno = 0;
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_bind == 0);
   assert(errno == ENOMEM);
 
@@ -450,7 +456,7 @@ void test_allow_unix_sockets(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-unix-sockets", "--", "true", NULL};
 
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.allow_unix_sockets == 1);
   assert(opts.allow_network_sockets == 0);
 
@@ -462,7 +468,7 @@ void test_allow_network_sockets(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-network-sockets", "--", "true", NULL};
 
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.allow_unix_sockets == 0);
   assert(opts.allow_network_sockets == 1);
 
@@ -474,7 +480,7 @@ void test_require_abi(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--require-abi", "9", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) == 0);
   assert(opts.require_abi == 9);
 
   caged_opts_free(&opts);
@@ -484,7 +490,7 @@ void test_require_abi_missing_value(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--require-abi", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -493,7 +499,7 @@ void test_require_abi_invalid(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--require-abi", "abc", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.require_abi == 0);
 
   caged_opts_free(&opts);
@@ -504,7 +510,7 @@ void test_require_abi_zero(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--require-abi", "0", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -513,7 +519,7 @@ void test_require_abi_negative(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--require-abi", "-3", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -523,7 +529,7 @@ void test_keep_env(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--keep-env", "--", "true", NULL};
 
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.keep_env == 1);
   assert(opts.n_env == 0);
 
@@ -535,7 +541,7 @@ void test_env_flag(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--env", "FOO=bar", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) == 0);
   assert(opts.keep_env == 0);
   assert(opts.n_env == 1);
   assert(strcmp(opts.env[0], "FOO=bar") == 0);
@@ -548,7 +554,7 @@ void test_env_flag_repeated(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--env", "A=1", "--env", "B=", "--", "true", NULL};
 
-  assert(parse_cmd_line(7, argv, &opts) == 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) == 0);
   assert(opts.n_env == 2);
   assert(strcmp(opts.env[0], "A=1") == 0);
   assert(strcmp(opts.env[1], "B=") == 0);
@@ -560,7 +566,7 @@ void test_env_missing_value(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--env", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -570,7 +576,7 @@ void test_env_missing_equals(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--env", "FOO", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_env == 0);
 
   caged_opts_free(&opts);
@@ -581,7 +587,7 @@ void test_env_empty_name(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--env", "=bar", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_env == 0);
 
   caged_opts_free(&opts);
@@ -594,7 +600,7 @@ void test_env_list_grows(void) {
   char *argv[] = {"caged", "--env", "A=1", "--env", "B=2", "--env", "C=3",
                   "--env", "D=4", "--env", "E=5", "--", "true", NULL};
 
-  assert(parse_cmd_line(13, argv, &opts) == 0);
+  assert(parse_cmd_line(13, argv, &opts, NULL) == 0);
   assert(opts.n_env == 5);
   assert(opts.cap_env >= 5);
   assert(strcmp(opts.env[0], "A=1") == 0);
@@ -613,7 +619,7 @@ void test_env_out_of_memory(void) {
   fake.realloc_err = ENOMEM;
 
   errno = 0;
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.n_env == 0);
   assert(errno == ENOMEM);
 
@@ -625,7 +631,7 @@ void test_max_procs(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--max-procs", "64", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) == 0);
   assert(opts.max_procs == 64);
 
   caged_opts_free(&opts);
@@ -636,7 +642,7 @@ void test_max_procs_missing_value(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--max-procs", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -646,7 +652,7 @@ void test_max_procs_invalid(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--max-procs", "abc", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.max_procs == 0);
 
   caged_opts_free(&opts);
@@ -657,7 +663,7 @@ void test_max_procs_zero(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--max-procs", "0", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -667,7 +673,7 @@ void test_max_procs_negative(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--max-procs", "-1", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -677,7 +683,7 @@ void test_max_procs_trailing_garbage(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--max-procs", "12abc", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -688,7 +694,7 @@ void test_max_procs_overflow(void) {
   char *argv[] = {"caged", "--max-procs", "99999999999999999999", "--", "true",
                   NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -698,7 +704,7 @@ void test_allow_sysv_ipc(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--allow-sysv-ipc", "--", "true", NULL};
 
-  assert(parse_cmd_line(4, argv, &opts) == 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
   assert(opts.allow_sysv_ipc == 1);
   assert(opts.allow_unix_sockets == 0);
   assert(opts.allow_network_sockets == 0);
@@ -713,7 +719,7 @@ void test_allow_sockets_combined(void) {
                   "/usr",      "--allow-network-sockets", "--allow-connect-port",
                   "443",       "--", "true", NULL};
 
-  assert(parse_cmd_line(9, argv, &opts) == 0);
+  assert(parse_cmd_line(9, argv, &opts, NULL) == 0);
   assert(opts.allow_unix_sockets == 1);
   assert(opts.allow_network_sockets == 1);
   assert(opts.n_r == 1);
@@ -736,7 +742,7 @@ void test_restrict_flags(void) {
                   "true",
                   NULL};
 
-  assert(parse_cmd_line(8, argv, &opts) == 0);
+  assert(parse_cmd_line(8, argv, &opts, NULL) == 0);
   assert(opts.restrict_flags ==
          (LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
           LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
@@ -752,7 +758,7 @@ void test_restrict_flags_with_ro(void) {
   char *argv[] = {"caged", "--ro", "/usr", "--tsync", "--", "true", NULL};
 
   reset_fake();
-  assert(parse_cmd_line(6, argv, &opts) == 0);
+  assert(parse_cmd_line(6, argv, &opts, NULL) == 0);
   assert(opts.n_r == 1);
   assert(strcmp(opts.r_dir[0], "/usr") == 0);
   assert(opts.restrict_flags == LANDLOCK_RESTRICT_SELF_TSYNC);
@@ -765,7 +771,7 @@ void test_report_fd(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--report-fd", "7", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) == 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) == 0);
   assert(opts.report_fd == 7);
 
   caged_opts_free(&opts);
@@ -775,7 +781,7 @@ void test_report_fd_missing_value(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--report-fd", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) < 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -786,7 +792,7 @@ void test_report_fd_too_small(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--report-fd", "2", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.report_fd == 0);
 
   caged_opts_free(&opts);
@@ -796,7 +802,7 @@ void test_report_fd_invalid(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--report-fd", "abc", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
   assert(opts.report_fd == 0);
 
   caged_opts_free(&opts);
@@ -807,7 +813,7 @@ void test_report_fd_overflow(void) {
   char *argv[] = {"caged", "--report-fd", "99999999999999999999", "--", "true",
                   NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -817,7 +823,7 @@ void test_report_fd_above_int_max(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--report-fd", "2147483648", "--", "true", NULL};
 
-  assert(parse_cmd_line(5, argv, &opts) < 0);
+  assert(parse_cmd_line(5, argv, &opts, NULL) < 0);
 
   caged_opts_free(&opts);
 }
@@ -828,7 +834,7 @@ void test_report_fd_last_wins(void) {
   char *argv[] = {"caged", "--report-fd", "4", "--report-fd", "5", "--", "true",
                   NULL};
 
-  assert(parse_cmd_line(7, argv, &opts) == 0);
+  assert(parse_cmd_line(7, argv, &opts, NULL) == 0);
   assert(opts.report_fd == 5);
 
   caged_opts_free(&opts);
@@ -840,7 +846,7 @@ void test_report_fd_after_separator_is_ignored(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--", "sh", "-c", "--report-fd", "7", NULL};
 
-  assert(parse_cmd_line(6, argv, &opts) == 0);
+  assert(parse_cmd_line(6, argv, &opts, NULL) == 0);
   assert(opts.report_fd == 0);
 
   caged_opts_free(&opts);
@@ -888,7 +894,7 @@ void test_report_fd_reports_usage_error_before_the_flag(void) {
   struct caged_opts opts = {0};
 
   int saved = silence_stderr();
-  assert(parse_cmd_line(4, argv, &opts) < 0);
+  assert(parse_cmd_line(4, argv, &opts, NULL) < 0);
   restore_stderr(saved);
 
   close(fds[1]);
@@ -911,7 +917,7 @@ void test_report_fd_prescan_rejects_bad_values(void) {
   for (size_t k = 0; k < sizeof bad / sizeof bad[0]; k++) {
     struct caged_opts opts = {0};
     int saved = silence_stderr();
-    assert(parse_cmd_line(4, bad[k], &opts) < 0);
+    assert(parse_cmd_line(4, bad[k], &opts, NULL) < 0);
     restore_stderr(saved);
     assert(opts.report_fd == 0);
     caged_opts_free(&opts);

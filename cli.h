@@ -13,8 +13,21 @@
 
 #include "caged.h"
 
-/* Parses argv into opts. Returns 0 on success, -1 on a usage error. */
-int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts);
+/*
+  Parses argv into opts.
+
+  `cmd`, when it is not NULL, receives the command to run: a pointer to the
+  NULL-terminated argv tail after "--". It stays NULL when the parse stops
+  before a command (--help, or a usage error). It points into argv, so
+  nothing is allocated and nothing has to be freed.
+
+  The command lives outside struct caged_opts on purpose: caged_setup never
+  looks at it, only the front end that execs it does.
+
+  Returns 0 on success, -1 on a usage error.
+*/
+int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
+                   char ***cmd);
 
 /* Prints the command usage to the given stream. */
 void print_help(FILE *out);

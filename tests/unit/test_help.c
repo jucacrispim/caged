@@ -84,7 +84,7 @@ void test_parse_help_long(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--help", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) == 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) == 0);
   assert(opts.help == 1);
 
   caged_opts_free(&opts);
@@ -95,7 +95,7 @@ void test_parse_help_short(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "-h", NULL};
 
-  assert(parse_cmd_line(2, argv, &opts) == 0);
+  assert(parse_cmd_line(2, argv, &opts, NULL) == 0);
   assert(opts.help == 1);
 
   caged_opts_free(&opts);
@@ -114,7 +114,7 @@ static void capture_no_args(char *buf, size_t size) {
   close(pipefd[1]);
 
   struct caged_opts opts = {0};
-  assert(parse_cmd_line(1, (char *[]){"caged", NULL}, &opts) < 0);
+  assert(parse_cmd_line(1, (char *[]){"caged", NULL}, &opts, NULL) < 0);
 
   fflush(stderr);
   assert(dup2(saved, STDERR_FILENO) >= 0);
