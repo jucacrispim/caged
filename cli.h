@@ -2,7 +2,7 @@
   Command-line front end, shared by main.c and the unit tests.
 
   Nothing here belongs to the library: these helpers exist to turn argv into
-  a struct cmd_opts, to print the usage and to warn about the kernel ABI. The
+  a struct caged_opts, to print the usage and to warn about the kernel ABI. The
   sandbox and the command environment are in caged.h / caged.c.
 */
 
@@ -14,7 +14,7 @@
 #include "caged.h"
 
 /* Parses argv into opts. Returns 0 on success, -1 on a usage error. */
-int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts);
+int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts);
 
 /* Prints the command usage to the given stream. */
 void print_help(FILE *out);

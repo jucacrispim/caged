@@ -70,7 +70,7 @@ static void setup_fake(void) {
 }
 
 /* Runs caged_setup and returns the env it built. */
-static char **run_setup(const struct cmd_opts *opts) {
+static char **run_setup(const struct caged_opts *opts) {
   char **env = (char **)&env;
   setup_fake();
   assert(caged_setup(opts, &env) == CAGED_OK);
@@ -78,7 +78,7 @@ static char **run_setup(const struct cmd_opts *opts) {
 }
 
 /* Pushes a NAME=VALUE into opts.env, as the parser would. */
-static void add_env(struct cmd_opts *opts, const char *entry) {
+static void add_env(struct caged_opts *opts, const char *entry) {
   assert(push_env_entry(&opts->env, &opts->n_env, &opts->cap_env, entry) == 0);
 }
 
@@ -94,7 +94,7 @@ void test_default_keeps_only_base(void) {
   assert(setenv("DEEPSEEK_API_KEY", "secret", 1) == 0);
   assert(setenv("SSH_AUTH_SOCK", "/run/user/1000/agent", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = run_setup(&opts);
 
   assert(env != NULL);
@@ -117,7 +117,7 @@ void test_setup_clears_environ(void) {
   assert(setenv("PATH", "/usr/bin", 1) == 0);
   assert(setenv("DEEPSEEK_API_KEY", "secret", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = run_setup(&opts);
 
   assert(getenv("DEEPSEEK_API_KEY") == NULL);
@@ -133,14 +133,14 @@ void test_setup_env_flag_reaches_environ(void) {
   clear_environ();
   assert(setenv("PATH", "/usr/bin", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   add_env(&opts, "FOO=bar");
   char **env = run_setup(&opts);
 
   assert(strcmp(getenv("FOO"), "bar") == 0);
   assert(env_count(env, "FOO") == 1);
   free(env);
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
   clear_environ();
 }
 
@@ -151,7 +151,7 @@ void test_setup_env_null_out(void) {
   assert(setenv("PATH", "/usr/bin", 1) == 0);
   assert(setenv("DEEPSEEK_API_KEY", "secret", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   setup_fake();
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(getenv("DEEPSEEK_API_KEY") == NULL);
@@ -165,7 +165,7 @@ void test_setup_env_null_on_error(void) {
   reset_fake();
   fake.abi = -1;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = (char **)&env;
   assert(caged_setup(&opts, &env) == CAGED_ERR_NO_LANDLOCK);
   assert(env == NULL);
@@ -177,7 +177,7 @@ void test_setup_env_out_of_memory(void) {
   clear_environ();
   assert(setenv("PATH", "/usr/bin", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = (char **)&env;
   setup_fake();
   fake.fail_realloc = 1;
@@ -195,7 +195,7 @@ void test_setup_env_name_alloc_failure(void) {
   clear_environ();
   assert(setenv("PATH", "/usr/bin", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = (char **)&env;
   setup_fake();
   fake.fail_strndup = 1;
@@ -216,7 +216,7 @@ void test_setup_records_warning_switch(void) {
   assert(setenv("PATH", "/usr/bin", 1) == 0);
   assert(setenv("CAGED_DISABLE_WARNINGS", "1", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = run_setup(&opts);
 
   assert(caged_warnings_disabled == 1);
@@ -232,7 +232,7 @@ void test_setup_warning_switch_other_value(void) {
   assert(setenv("PATH", "/usr/bin", 1) == 0);
   assert(setenv("CAGED_DISABLE_WARNINGS", "0", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = run_setup(&opts);
 
   assert(caged_warnings_disabled == 0);
@@ -246,7 +246,7 @@ void test_default_drops_name_of_same_length(void) {
   clear_environ();
   assert(setenv("NOPE", "1", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = run_setup(&opts);
 
   assert(env != NULL);
@@ -261,7 +261,7 @@ void test_keep_env_inherits_all(void) {
   assert(setenv("PATH", "/usr/bin", 1) == 0);
   assert(setenv("DEEPSEEK_API_KEY", "secret", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.keep_env = 1;
   char **env = run_setup(&opts);
 
@@ -277,7 +277,7 @@ void test_keep_env_inherits_all(void) {
 void test_empty_environment(void) {
   clear_environ();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char **env = run_setup(&opts);
 
   assert(env != NULL);
@@ -290,7 +290,7 @@ void test_env_flag_alone(void) {
   clear_environ();
   assert(setenv("PATH", "/usr/bin", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   add_env(&opts, "FOO=bar");
   char **env = run_setup(&opts);
 
@@ -299,7 +299,7 @@ void test_env_flag_alone(void) {
   assert(strcmp(env_value(env, "PATH"), "/usr/bin") == 0);
   assert(strcmp(env_value(env, "FOO"), "bar") == 0);
   free(env);
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
   clear_environ();
 }
 
@@ -308,7 +308,7 @@ void test_env_flag_overrides_inherited(void) {
   clear_environ();
   assert(setenv("FOO", "old", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.keep_env = 1;
   add_env(&opts, "FOO=new");
   char **env = run_setup(&opts);
@@ -317,7 +317,7 @@ void test_env_flag_overrides_inherited(void) {
   assert(env_len(env) == 1);
   assert(strcmp(env_value(env, "FOO"), "new") == 0);
   free(env);
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
   clear_environ();
 }
 
@@ -327,7 +327,7 @@ void test_env_override_does_not_match_prefix(void) {
   assert(setenv("FOOBAR", "keep", 1) == 0);
   assert(setenv("FOO", "old", 1) == 0);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.keep_env = 1;
   add_env(&opts, "FOO=new");
   char **env = run_setup(&opts);
@@ -337,7 +337,7 @@ void test_env_override_does_not_match_prefix(void) {
   assert(strcmp(env_value(env, "FOOBAR"), "keep") == 0);
   assert(strcmp(env_value(env, "FOO"), "new") == 0);
   free(env);
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
   clear_environ();
 }
 
@@ -351,7 +351,7 @@ void test_env_list_grows(void) {
     assert(setenv(name, "x", 1) == 0);
   }
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.keep_env = 1;
   char **env = run_setup(&opts);
 
@@ -366,7 +366,7 @@ void test_env_list_grows(void) {
 void test_setup_env_without_equals(void) {
   clear_environ();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   add_env(&opts, "NOEQ");
   char **env = run_setup(&opts);
 
@@ -374,7 +374,7 @@ void test_setup_env_without_equals(void) {
   assert(getenv("NOEQ") != NULL);
   assert(strcmp(getenv("NOEQ"), "") == 0);
   free(env);
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
   clear_environ();
 }
 

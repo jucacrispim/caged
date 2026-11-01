@@ -265,7 +265,7 @@ static int push_env(char ***list, int *n, int *cap, const char *entry) {
   return 0;
 }
 
-int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts) {
+int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts) {
   if (argc <= 1) {
     print_help(stderr);
     return -1;

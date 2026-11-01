@@ -81,24 +81,24 @@ void test_print_help(void) {
 
 /* --help sets the help flag and stops parsing successfully */
 void test_parse_help_long(void) {
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char *argv[] = {"caged", "--help", NULL};
 
   assert(parse_cmd_line(2, argv, &opts) == 0);
   assert(opts.help == 1);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 /* -h is an alias for --help */
 void test_parse_help_short(void) {
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   char *argv[] = {"caged", "-h", NULL};
 
   assert(parse_cmd_line(2, argv, &opts) == 0);
   assert(opts.help == 1);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 /* Redirects stderr, runs parse_cmd_line with no arguments and copies the
@@ -113,7 +113,7 @@ static void capture_no_args(char *buf, size_t size) {
   assert(dup2(pipefd[1], STDERR_FILENO) >= 0);
   close(pipefd[1]);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   assert(parse_cmd_line(1, (char *[]){"caged", NULL}, &opts) < 0);
 
   fflush(stderr);

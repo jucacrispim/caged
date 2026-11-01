@@ -29,15 +29,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 /* Renders the filter as pseudo code and leaves it in buf. */
 static void export_pfc(scmp_filter_ctx ctx, char *buf, size_t size) {
-  char path[] = "/tmp/caged_pfc_XXXXXX";
-  int fd = mkstemp(path);
+  /*
+    A memfd keeps the pseudo code off the filesystem: there is no /tmp path to
+    honour (or to ignore $TMPDIR), no template to collide and nothing left
+    behind when the test dies halfway. seccomp_export_pfc only needs a
+    seekable, readable descriptor.
+  */
+  int fd = memfd_create("caged_pfc", 0);
 
   assert(fd >= 0);
-  assert(unlink(path) == 0);
   assert(seccomp_export_pfc(ctx, fd) == 0);
   assert(lseek(fd, 0, SEEK_SET) == 0);
 

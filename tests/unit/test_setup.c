@@ -35,7 +35,7 @@ void test_setup_ok(void) {
   fake.prctl_ret = 0;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/usr");
   push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/etc");
   push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/tmp/x");
@@ -51,7 +51,7 @@ void test_setup_ok(void) {
   /* no restrict-self flags are passed by default */
   assert(fake.last_restrict_flags == 0);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 /* releasing the whole connect access clears its bit from the handled mask */
@@ -61,7 +61,7 @@ void test_setup_released_net_general(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.released_net = LANDLOCK_ACCESS_NET_CONNECT_TCP;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -77,7 +77,7 @@ void test_setup_net_port_rules(void) {
   fake.add_rule_ret = 0;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
   push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
 
@@ -89,7 +89,7 @@ void test_setup_net_port_rules(void) {
   assert(fake.last_net_allowed_access == LANDLOCK_ACCESS_NET_BIND_TCP);
   assert(fake.last_net_port == 80);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 void test_setup_connect_rule_error(void) {
@@ -99,13 +99,13 @@ void test_setup_connect_rule_error(void) {
   fake.add_rule_ret = -1;
   fake.add_rule_err = EINVAL;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_CONNECT_ACCESS);
   assert(fake.restrict_calls_count == 0);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 void test_setup_bind_rule_error(void) {
@@ -115,13 +115,13 @@ void test_setup_bind_rule_error(void) {
   fake.add_rule_ret = -1;
   fake.add_rule_err = EINVAL;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_BIND_ACCESS);
   assert(fake.restrict_calls_count == 0);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 /* below ABI 4 net is unsupported, so nothing is handled */
@@ -131,7 +131,7 @@ void test_setup_net_unsupported_abi(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.last_handled_net == 0);
@@ -144,7 +144,7 @@ void test_setup_released_scope(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.released_scopes = LANDLOCK_SCOPE_SIGNAL;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -158,7 +158,7 @@ void test_setup_scopes_unsupported_abi(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.last_scoped == 0);
@@ -172,7 +172,7 @@ void test_setup_restrict_flags(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.restrict_flags =
       LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON | LANDLOCK_RESTRICT_SELF_TSYNC;
 
@@ -188,7 +188,7 @@ void test_setup_restrict_flags_unsupported_abi(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.restrict_flags = RESTRICT_FLAGS;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -202,7 +202,7 @@ void test_setup_restrict_flags_abi_7(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.restrict_flags = RESTRICT_FLAGS;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -214,7 +214,7 @@ void test_setup_no_landlock(void) {
   reset_fake();
   fake.abi = -1;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_NO_LANDLOCK);
   assert(fake.create_calls_count == 0);
@@ -227,7 +227,7 @@ void test_setup_require_abi_met(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.require_abi = 6;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -242,7 +242,7 @@ void test_setup_require_abi_newer_kernel(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.require_abi = 9;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -255,7 +255,7 @@ void test_setup_require_abi_too_old(void) {
   reset_fake();
   fake.abi = 6;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.require_abi = 9;
 
   errno = 0;
@@ -273,7 +273,7 @@ void test_setup_require_abi_unset(void) {
   fake.create_ruleset_ret = 3;
   fake.restrict_self_ret = 0;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(abi_found == 1);
@@ -284,7 +284,7 @@ void test_setup_require_abi_no_landlock(void) {
   reset_fake();
   fake.abi = -1;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.require_abi = 9;
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_NO_LANDLOCK);
@@ -297,7 +297,7 @@ void test_setup_create_ruleset_error(void) {
   fake.create_ruleset_ret = -1;
   fake.create_ruleset_err = EPERM;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   errno = 0;
   assert(caged_setup(&opts, NULL) == CAGED_ERR_CREATE_RULESET);
@@ -312,13 +312,13 @@ void test_setup_allow_ro_error(void) {
   fake.open_ret = -1;
   fake.open_err = ENOENT;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/nope");
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_READ_ACCESS);
   assert(fake.restrict_calls_count == 0);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 void test_setup_allow_rw_error(void) {
@@ -328,13 +328,13 @@ void test_setup_allow_rw_error(void) {
   fake.open_ret = -1;
   fake.open_err = ENOENT;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/nope");
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_RW_ACCESS);
   assert(fake.restrict_calls_count == 0);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
 }
 
 void test_setup_restrict_prctl_error(void) {
@@ -344,7 +344,7 @@ void test_setup_restrict_prctl_error(void) {
   fake.prctl_ret = -1;
   fake.prctl_err = EPERM;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_RESTRICT_SELF);
 }
@@ -356,7 +356,7 @@ void test_setup_restrict_syscall_error(void) {
   fake.prctl_ret = 0;
   fake.restrict_self_ret = -1;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_RESTRICT_SELF);
   assert(fake.restrict_calls_count == 1);
@@ -403,7 +403,7 @@ static void fail_seccomp_rule_at(int n) {
 void test_setup_rlimits_default(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.setrlimit_calls_count == 1);
@@ -422,7 +422,7 @@ void test_setup_rlimits_default(void) {
 void test_setup_max_procs(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.max_procs = 64;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -438,7 +438,7 @@ void test_setup_rlimit_core_error(void) {
   fake.setrlimit_ret = -1;
   fake.setrlimit_err = EPERM;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_RLIMIT);
   assert(fake.create_calls_count == 0);
@@ -452,7 +452,7 @@ void test_setup_rlimit_nproc_error(void) {
   fake.setrlimit_err = EPERM;
   fake.setrlimit_fail_at = 2;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.max_procs = 64;
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_RLIMIT);
@@ -466,7 +466,7 @@ void test_setup_close_fds_error(void) {
   fake.close_range_ret = -1;
   fake.close_range_err = EINVAL;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_CLOSE_FDS);
   assert(fake.seccomp_load_calls_count == 1);
@@ -521,7 +521,7 @@ void test_setup_report_fd(void) {
   int fd = open("/dev/null", O_WRONLY);
   assert(fd >= 3);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.report_fd = fd;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -539,7 +539,7 @@ void test_setup_report_fd(void) {
 void test_setup_report_fd_error(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.report_fd = 9999;
 
   errno = 0;
@@ -554,7 +554,7 @@ void test_setup_report_fd_error(void) {
 void test_setup_seccomp_defaults(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.seccomp_rule_calls_count ==
@@ -571,7 +571,7 @@ void test_setup_seccomp_defaults(void) {
 void test_setup_seccomp_allow_unix(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.allow_unix_sockets = 1;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -584,7 +584,7 @@ void test_setup_seccomp_allow_unix(void) {
 void test_setup_seccomp_allow_network(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.allow_network_sockets = 1;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -597,7 +597,7 @@ void test_setup_seccomp_allow_network(void) {
 void test_setup_seccomp_allow_both(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.allow_unix_sockets = 1;
   opts.allow_network_sockets = 1;
 
@@ -610,7 +610,7 @@ void test_setup_seccomp_allow_both(void) {
 void test_setup_seccomp_allow_sysv_ipc(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.allow_sysv_ipc = 1;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -625,7 +625,7 @@ void test_setup_seccomp_sysv_ipc_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 8);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSVIPC);
   assert(seccomp_detail == -EINVAL);
@@ -639,7 +639,7 @@ void test_setup_seccomp_sysv_ipc_last_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 7 + sysv_rules());
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSVIPC);
   assert(fake.seccomp_resolve_calls_count == sysv_rules());
@@ -651,7 +651,7 @@ void test_setup_seccomp_sysv_ipc_resolve_error(void) {
   setup_reaches_seccomp();
   fake.seccomp_resolve_fail_at = 3;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSVIPC);
   assert(seccomp_detail == -ENOSYS);
@@ -664,7 +664,7 @@ void test_setup_seccomp_syscalls_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 7 + sysv_rules() + 1);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSCALLS);
   assert(seccomp_detail == -EINVAL);
@@ -678,7 +678,7 @@ void test_setup_seccomp_syscalls_last_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 7 + sysv_rules() + deny_rules());
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSCALLS);
   assert(strcmp(seccomp_failed_syscall, DENY_SYSCALLS[deny_rules() - 1]) == 0);
@@ -691,7 +691,7 @@ void test_setup_seccomp_syscalls_resolve_error(void) {
   setup_reaches_seccomp();
   fake.seccomp_resolve_fail_at = sysv_rules() + 2;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSCALLS);
   assert(seccomp_detail == -ENOSYS);
@@ -705,7 +705,7 @@ void test_setup_seccomp_init_error(void) {
   setup_reaches_seccomp();
   fake.seccomp_init_null = 1;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_INIT);
   assert(fake.seccomp_rule_calls_count == 0);
@@ -717,7 +717,7 @@ void test_setup_seccomp_families_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(1);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_FAMILIES);
   assert(seccomp_detail == -EINVAL);
@@ -731,7 +731,7 @@ void test_setup_seccomp_above_af_max_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules());
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_FAMILIES);
   assert(seccomp_detail == -EINVAL);
@@ -742,7 +742,7 @@ void test_setup_seccomp_inet_raw_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 1);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_INET_RAW);
   assert(seccomp_detail == -EINVAL);
@@ -755,7 +755,7 @@ void test_setup_seccomp_inet6_raw_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 2);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_INET_RAW);
   assert(seccomp_detail == -EINVAL);
@@ -766,7 +766,7 @@ void test_setup_seccomp_netlink_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 3);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_NETLINK);
   assert(seccomp_failed_family == -1);
@@ -776,7 +776,7 @@ void test_setup_seccomp_unix_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 4);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_UNIX);
 }
@@ -785,7 +785,7 @@ void test_setup_seccomp_network_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 5);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_NETWORK);
 }
@@ -795,7 +795,7 @@ void test_setup_seccomp_network_inet6_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 6);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_NETWORK);
   assert(seccomp_detail == -EINVAL);
@@ -806,7 +806,7 @@ void test_setup_seccomp_network_netlink_error(void) {
   setup_reaches_seccomp();
   fail_seccomp_rule_at(family_rules() + 7);
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_NETWORK);
   assert(fake.seccomp_load_calls_count == 0);
@@ -817,7 +817,7 @@ void test_setup_seccomp_load_error(void) {
   setup_reaches_seccomp();
   fake.seccomp_load_ret = -EPERM;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_LOAD);
   assert(fake.seccomp_load_calls_count == 1);
@@ -829,7 +829,7 @@ void test_setup_seccomp_load_error(void) {
 void test_setup_seccomp_tsync(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.restrict_flags = LANDLOCK_RESTRICT_SELF_TSYNC;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
@@ -844,7 +844,7 @@ void test_setup_seccomp_tsync(void) {
 void test_setup_seccomp_no_tsync(void) {
   setup_reaches_seccomp();
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.seccomp_attr_calls_count == 0);
@@ -856,7 +856,7 @@ void test_setup_seccomp_tsync_error(void) {
   setup_reaches_seccomp();
   fake.seccomp_attr_ret = -EINVAL;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.restrict_flags = LANDLOCK_RESTRICT_SELF_TSYNC;
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_TSYNC);
@@ -872,7 +872,7 @@ void test_setup_seccomp_load_tid(void) {
   setup_reaches_seccomp();
   fake.seccomp_load_ret = 1234;
 
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
   opts.restrict_flags = LANDLOCK_RESTRICT_SELF_TSYNC;
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_LOAD);

@@ -59,6 +59,20 @@
    LANDLOCK_ACCESS_FS_TRUNCATE | LANDLOCK_ACCESS_FS_IOCTL_DEV |                \
    LANDLOCK_ACCESS_FS_RESOLVE_UNIX)
 
+/* scopes restricted by default (added in Landlock ABI 6) */
+#define SCOPED (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL)
+
+/* net access handled by the latest api (added in Landlock ABI 4) */
+#define NET_HANDLED                                                            \
+  (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
+
+/* restrict-self flags supported by the latest api: the log flags were added
+   in ABI 7 and TSYNC in ABI 8 */
+#define RESTRICT_FLAGS                                                         \
+  (LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |                                  \
+   LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |                                    \
+   LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
+
 #define PERMS_READ                                                             \
   (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR |                \
    LANDLOCK_ACCESS_FS_EXECUTE)
@@ -74,20 +88,6 @@
   (LANDLOCK_ACCESS_FS_READ_DIR | LANDLOCK_ACCESS_FS_REMOVE_DIR |               \
    LANDLOCK_ACCESS_FS_REMOVE_FILE | LANDLOCK_ACCESS_FS_MAKE_DIR |              \
    LANDLOCK_ACCESS_FS_MAKE_REG)
-
-/* scopes restricted by default (added in Landlock ABI 6) */
-#define SCOPED (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL)
-
-/* net access handled by the latest api (added in Landlock ABI 4) */
-#define NET_HANDLED                                                            \
-  (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
-
-/* restrict-self flags supported by the latest api: the log flags were added
-   in ABI 7 and TSYNC in ABI 8 */
-#define RESTRICT_FLAGS                                                         \
-  (LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |                                  \
-   LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |                                    \
-   LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
 
 /*
   The sandbox diagnostics declared in caged.h. They are file-global here so
@@ -161,7 +161,7 @@ static const char *BASE_ENV[] = {
 
 #define BASE_ENV_N (sizeof BASE_ENV / sizeof BASE_ENV[0])
 
-void cmd_opts_free(struct cmd_opts *opts) {
+void caged_opts_free(struct caged_opts *opts) {
   free((void *)opts->r_dir);
   free((void *)opts->rw_dir);
   free(opts->connect_ports);
@@ -182,110 +182,6 @@ void cmd_opts_free(struct cmd_opts *opts) {
   opts->cap_connect = 0;
   opts->cap_bind = 0;
   opts->cap_env = 0;
-}
-
-/*
-  Appends `entry` to a dynamic list of environment strings, growing the
-  backing array (doubling its capacity) when it is full. Returns 0 on
-  success, -1 on allocation failure.
-*/
-static int push_env_entry(char ***list, int *n, int *cap, const char *entry) {
-  if (*n == *cap) {
-    int new_cap = *cap ? *cap * 2 : 4;
-    char **grown = realloc(*list, (size_t)new_cap * sizeof **list);
-    if (grown == NULL) {
-      return -1;
-    }
-    *list = grown;
-    *cap = new_cap;
-  }
-  (*list)[(*n)++] = (char *)entry;
-  return 0;
-}
-
-/* Length of the NAME part of a NAME=VALUE entry. */
-static size_t env_name_len(const char *entry) {
-  const char *eq = strchr(entry, '=');
-  return eq == NULL ? strlen(entry) : (size_t)(eq - entry);
-}
-
-/* True when `entry`'s name is exactly the `name_len` bytes of `name`. */
-static int env_same_name(const char *entry, const char *name, size_t name_len) {
-  return env_name_len(entry) == name_len && strncmp(entry, name, name_len) == 0;
-}
-
-/* True when `entry` is one of the variables inherited by default. */
-static int env_is_base(const char *entry) {
-  for (size_t k = 0; k < BASE_ENV_N; k++) {
-    if (env_same_name(entry, BASE_ENV[k], strlen(BASE_ENV[k]))) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-/* True when `entry` is overridden by one of the opts' env entries. */
-static int env_overridden(const char *entry, const struct cmd_opts *opts) {
-  for (int k = 0; k < opts->n_env; k++) {
-    if (env_same_name(entry, opts->env[k], env_name_len(opts->env[k]))) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-/*
-  Builds the environment variables. The default base, or
-  everything inherited with keep_env and the env values.
-  Returns a NULL-terminated array, or NULL on allocation failure.
-*/
-static char **build_env(const struct cmd_opts *opts) {
-  char **env = NULL;
-  int n = 0;
-  int cap = 0;
-  int failed = 0;
-
-  if (environ != NULL) {
-    for (char **e = environ; *e != NULL; e++) {
-      if (!opts->keep_env && !env_is_base(*e)) {
-        continue;
-      }
-      if (env_overridden(*e, opts)) {
-        continue;
-      }
-      failed |= push_env_entry(&env, &n, &cap, *e) < 0;
-    }
-  }
-  for (int k = 0; k < opts->n_env; k++) {
-    failed |= push_env_entry(&env, &n, &cap, opts->env[k]) < 0;
-  }
-  failed |= push_env_entry(&env, &n, &cap, NULL) < 0;
-  if (failed) {
-    free(env);
-    return NULL;
-  }
-  return env;
-}
-
-/*
-  Replaces the process environment with the given entries. Anything not in
-  `env` is dropped from environ, so every child of this process starts with
-  the allowed variables only.
-*/
-static void replace_environ(char **env) {
-  clearenv();
-  for (int k = 0; env[k] != NULL; k++) {
-    const char *eq = strchr(env[k], '=');
-    if (eq == NULL) {
-      setenv(env[k], "", 1);
-      continue;
-    }
-    char *name = strndup(env[k], (size_t)(eq - env[k]));
-    if (name != NULL) {
-      setenv(name, eq + 1, 1);
-      free(name);
-    }
-  }
 }
 
 /*
@@ -315,55 +211,9 @@ static long restrict_self(int ruleset_fd, unsigned long long flags) {
   return syscall(SYS_landlock_restrict_self, ruleset_fd, flags);
 }
 
-/* Sets soft and the hard limits. */
-static int set_limit(int resource, rlim_t value) {
-  struct rlimit rl = {.rlim_cur = value, .rlim_max = value};
-  return setrlimit(resource, &rl);
-}
-
-/*
-  Applies the resource limits. Core is always 0.
-*/
-static int apply_rlimits(long max_procs) {
-  if (set_limit(RLIMIT_CORE, 0) < 0) {
-    return -1;
-  }
-  if (max_procs > 0 && set_limit(RLIMIT_NPROC, (rlim_t)max_procs) < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-/*
-  Closes every file descriptor inherited above stderr, except `report_fd` when
-  one was requested: that descriptor is the out-of-band channel the front end
-  reports setup failures through, so it has to survive the sweep. It is marked
-  FD_CLOEXEC by caged_setup, so the command still does not inherit it. The
-  range is therefore split around it (and the empty half is skipped: the
-  kernel rejects a first > last range).
-*/
-static int close_inherited_fds(int report_fd) {
-  if (report_fd < 3) {
-    return close_range(3, ~0U, 0);
-  }
-  if (report_fd > 3 && close_range(3, (unsigned int)report_fd - 1, 0) < 0) {
-    return -1;
-  }
-  return close_range((unsigned int)report_fd + 1, ~0U, 0);
-}
-
 static long check_abi() {
   return syscall(SYS_landlock_create_ruleset, NULL, 0,
                  LANDLOCK_CREATE_RULESET_VERSION);
-}
-
-/*
-  True when the kernel's Landlock ABI meets the --require-abi floor. A floor
-  of 0 means "no requirement": caged then only warns about the features the
-  ABI lacks, which is the fail-open behaviour.
-*/
-static int abi_satisfies(long abi, long require) {
-  return require <= 0 || abi >= require;
 }
 
 /*
@@ -472,9 +322,10 @@ static long allow_read_access(int ruleset_fd, const char *path) {
 }
 
 /* Grant read and write access for a give path */
-static long allow_read_write_access(int ruleset_fd, const char *path, long abi) {
-  struct landlock_path_beneath_attr pb = {
-      .allowed_access = get_perms_read_write(abi)};
+static long allow_read_write_access(int ruleset_fd, const char *path,
+                                    long abi) {
+  struct landlock_path_beneath_attr pb = {.allowed_access =
+                                              get_perms_read_write(abi)};
   return allow_access(ruleset_fd, path, &pb);
 }
 
@@ -706,6 +557,156 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
   return CAGED_OK;
 }
 
+/*
+  Appends `entry` to a dynamic list of environment strings, growing the
+  backing array (doubling its capacity) when it is full. Returns 0 on
+  success, -1 on allocation failure.
+*/
+static int push_env_entry(char ***list, int *n, int *cap, const char *entry) {
+  if (*n == *cap) {
+    int new_cap = *cap ? *cap * 2 : 4;
+    char **grown = realloc(*list, (size_t)new_cap * sizeof **list);
+    if (grown == NULL) {
+      return -1;
+    }
+    *list = grown;
+    *cap = new_cap;
+  }
+  (*list)[(*n)++] = (char *)entry;
+  return 0;
+}
+
+/* Length of the NAME part of a NAME=VALUE entry. */
+static size_t env_name_len(const char *entry) {
+  const char *eq = strchr(entry, '=');
+  return eq == NULL ? strlen(entry) : (size_t)(eq - entry);
+}
+
+/* True when `entry`'s name is exactly the `name_len` bytes of `name`. */
+static int env_same_name(const char *entry, const char *name, size_t name_len) {
+  return env_name_len(entry) == name_len && strncmp(entry, name, name_len) == 0;
+}
+
+/* True when `entry` is one of the variables inherited by default. */
+static int env_is_base(const char *entry) {
+  for (size_t k = 0; k < BASE_ENV_N; k++) {
+    if (env_same_name(entry, BASE_ENV[k], strlen(BASE_ENV[k]))) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* True when `entry` is overridden by one of the opts' env entries. */
+static int env_overridden(const char *entry, const struct caged_opts *opts) {
+  for (int k = 0; k < opts->n_env; k++) {
+    if (env_same_name(entry, opts->env[k], env_name_len(opts->env[k]))) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/*
+  Builds the environment variables. The default base, or
+  everything inherited with keep_env and the env values.
+  Returns a NULL-terminated array, or NULL on allocation failure.
+*/
+static char **build_env(const struct caged_opts *opts) {
+  char **env = NULL;
+  int n = 0;
+  int cap = 0;
+  int failed = 0;
+
+  if (environ != NULL) {
+    for (char **e = environ; *e != NULL; e++) {
+      if (!opts->keep_env && !env_is_base(*e)) {
+        continue;
+      }
+      if (env_overridden(*e, opts)) {
+        continue;
+      }
+      failed |= push_env_entry(&env, &n, &cap, *e) < 0;
+    }
+  }
+  for (int k = 0; k < opts->n_env; k++) {
+    failed |= push_env_entry(&env, &n, &cap, opts->env[k]) < 0;
+  }
+  failed |= push_env_entry(&env, &n, &cap, NULL) < 0;
+  if (failed) {
+    free(env);
+    return NULL;
+  }
+  return env;
+}
+
+/*
+  Replaces the process environment with the given entries. Anything not in
+  `env` is dropped from environ, so every child of this process starts with
+  the allowed variables only.
+*/
+static void replace_environ(char **env) {
+  clearenv();
+  for (int k = 0; env[k] != NULL; k++) {
+    const char *eq = strchr(env[k], '=');
+    if (eq == NULL) {
+      setenv(env[k], "", 1);
+      continue;
+    }
+    char *name = strndup(env[k], (size_t)(eq - env[k]));
+    if (name != NULL) {
+      setenv(name, eq + 1, 1);
+      free(name);
+    }
+  }
+}
+
+/* Sets soft and the hard limits. */
+static int set_limit(int resource, rlim_t value) {
+  struct rlimit rl = {.rlim_cur = value, .rlim_max = value};
+  return setrlimit(resource, &rl);
+}
+
+/*
+  Applies the resource limits. Core is always 0.
+*/
+static int apply_rlimits(long max_procs) {
+  if (set_limit(RLIMIT_CORE, 0) < 0) {
+    return -1;
+  }
+  if (max_procs > 0 && set_limit(RLIMIT_NPROC, (rlim_t)max_procs) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+/*
+  Closes every file descriptor inherited above stderr, except `report_fd` when
+  one was requested: that descriptor is the out-of-band channel the front end
+  reports setup failures through, so it has to survive the sweep. It is marked
+  FD_CLOEXEC by caged_setup, so the command still does not inherit it. The
+  range is therefore split around it (and the empty half is skipped: the
+  kernel rejects a first > last range).
+*/
+static int close_inherited_fds(int report_fd) {
+  if (report_fd < 3) {
+    return close_range(3, ~0U, 0);
+  }
+  if (report_fd > 3 && close_range(3, (unsigned int)report_fd - 1, 0) < 0) {
+    return -1;
+  }
+  return close_range((unsigned int)report_fd + 1, ~0U, 0);
+}
+
+/*
+  True when the kernel's Landlock ABI meets the --require-abi floor. A floor
+  of 0 means "no requirement": caged then only warns about the features the
+  ABI lacks, which is the fail-open behaviour.
+*/
+static int abi_satisfies(long abi, long require) {
+  return require <= 0 || abi >= require;
+}
+
 const char *caged_strreturn(enum caged_return r) {
   switch (r) {
   case CAGED_OK:
@@ -762,9 +763,9 @@ const char *caged_strreturn(enum caged_return r) {
   Creates the sandbox. If return != CAGED_OK the process must be terminated
   with an error.
 
-  Use caged_strreturn for a sane message.
+  Use Caged_strreturn for a sane message.
 */
-enum caged_return caged_setup(const struct cmd_opts *opts, char ***env) {
+enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
   if (env != NULL) {
     *env = NULL;
   }

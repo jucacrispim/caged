@@ -56,16 +56,16 @@ static void die(int fd, const char *msg) {
 
 /* GCOV_EXCL_START */
 int main(int argc, char *argv[]) {
-  struct cmd_opts opts = {0};
+  struct caged_opts opts = {0};
 
   if (parse_cmd_line(argc, argv, &opts) < 0) {
-    cmd_opts_free(&opts);
+    caged_opts_free(&opts);
     return 2;
   }
 
   if (opts.help) {
     print_help(stdout);
-    cmd_opts_free(&opts);
+    caged_opts_free(&opts);
     return 0;
   }
 
@@ -99,7 +99,7 @@ int main(int argc, char *argv[]) {
      CAGED_DISABLE_WARNINGS switch before doing that. */
   warn_unsupported_features(abi_found);
 
-  cmd_opts_free(&opts);
+  caged_opts_free(&opts);
   /* execvpe searches for the binary with the *caller's* PATH, not with envp,
      so a cleared environment does not stop "caged -- sh" from finding sh. */
   if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {

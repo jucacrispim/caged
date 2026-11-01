@@ -37,7 +37,7 @@
   These LANDLOCK_* definitions are here because they are not defined in my
   current system. They live in the public header because both the library and
   the command-line front end need them: the library to compute the handled
-  masks, the front end to fill struct cmd_opts.
+  masks, the front end to fill struct caged_opts.
  */
 #ifndef LANDLOCK_ACCESS_FS_RESOLVE_UNIX
 #define LANDLOCK_ACCESS_FS_RESOLVE_UNIX (1ULL << 16)
@@ -81,7 +81,7 @@ enum caged_return {
   CAGED_ERR_REPORT_FD,
 };
 
-struct cmd_opts {
+struct caged_opts {
   const char **r_dir;
   int n_r;
   int cap_r;
@@ -156,18 +156,18 @@ const char *caged_strreturn(enum caged_return r);
   already-filtered environ). The caller owns the array and frees it with
   free(). Whatever happens before the end of the setup, *env is set to NULL.
 */
-enum caged_return caged_setup(const struct cmd_opts *opts, char ***env);
+enum caged_return caged_setup(const struct caged_opts *opts, char ***env);
 
-/* Releases the memory held by the lists of a cmd_opts. */
-void cmd_opts_free(struct cmd_opts *opts);
+/* Releases the memory held by the lists of a caged_opts. */
+void caged_opts_free(struct caged_opts *opts);
 
 /*
   Command-line front-end helpers, used by main.c. They are declared here
-  because they share struct cmd_opts with the library part.
+  because they share struct caged_opts with the library part.
 */
 
 /* Parses argv into opts. Returns 0 on success, -1 on a usage error. */
-int parse_cmd_line(int argc, char *argv[], struct cmd_opts *opts);
+int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts);
 
 /* Prints the command usage to the given stream. */
 void print_help(FILE *out);
