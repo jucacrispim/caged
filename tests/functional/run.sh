@@ -615,6 +615,51 @@ print(r, ctypes.get_errno())
   check "io_uring_setup denied with ENOSYS" "-1 38" "$out"
 }
 
+# a new namespace would be a fresh view of the system: a mount namespace can
+# overmount what Landlock granted, a user namespace hands out CAP_SYS_ADMIN.
+# 0x10000000 is CLONE_NEWUSER.
+test_unshare_is_denied() {
+  out=$($CAGED $RO_PY -- "$PYTHON" -c "
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.unshare.argtypes = [ctypes.c_int]
+libc.unshare.restype = ctypes.c_int
+r = libc.unshare(0x10000000)
+print(r, ctypes.get_errno())
+" 2>/dev/null)
+  check "unshare(CLONE_NEWUSER) denied with ENOSYS" "-1 38" "$out"
+}
+
+# mount() as a non-root user fails with EPERM, so 38 here can only come from
+# the filter
+test_mount_is_denied() {
+  out=$($CAGED $RO_PY -- "$PYTHON" -c "
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+                       ctypes.c_ulong, ctypes.c_void_p]
+libc.mount.restype = ctypes.c_int
+r = libc.mount(None, b'/nonexistent', None, 0, None)
+print(r, ctypes.get_errno())
+" 2>/dev/null)
+  check "mount denied with ENOSYS" "-1 38" "$out"
+}
+
+# clone3 cannot be filtered by flag (its flags sit behind a pointer seccomp
+# does not dereference), so the whole syscall is denied. 435 is clone3 on
+# every architecture with unified numbering; an empty argument block is
+# rejected with EINVAL by the kernel, so nothing is ever created here.
+test_clone3_is_denied() {
+  out=$($CAGED $RO_PY -- "$PYTHON" -c "
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+r = libc.syscall(435, None, 0)
+print(r, ctypes.get_errno())
+" 2>/dev/null)
+  check "clone3 denied with ENOSYS" "-1 38" "$out"
+}
+
 # the filter is a denylist of syscalls, not a "deny everything": ordinary
 # syscalls still work
 test_ordinary_syscalls_still_work() {
@@ -786,6 +831,9 @@ main() {
 
   test_ptrace_is_denied
   test_io_uring_is_denied
+  test_unshare_is_denied
+  test_mount_is_denied
+  test_clone3_is_denied
   test_ordinary_syscalls_still_work
 
   test_env_is_cleared_by_default

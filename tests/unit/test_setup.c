@@ -384,6 +384,9 @@ static int sysv_rules(void) { return (int)SYSV_IPC_N; }
 /* Number of rules added by deny_dangerous_syscalls(). */
 static int deny_rules(void) { return (int)DENY_SYSCALLS_N; }
 
+/* Number of rules added by deny_clone_namespaces(): one per namespace flag. */
+static int clone_ns_rules(void) { return (int)CLONE_NS_N; }
+
 /* Common setup for a landlock run that reaches the seccomp step. */
 static void setup_reaches_seccomp(void) {
   reset_fake();
@@ -558,7 +561,7 @@ void test_setup_seccomp_defaults(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.seccomp_rule_calls_count ==
-         family_rules() + 7 + sysv_rules() + deny_rules());
+         family_rules() + 7 + clone_ns_rules() + sysv_rules() + deny_rules());
   assert(fake.seccomp_load_calls_count == 1);
   assert(fake.seccomp_release_calls_count == 1);
   assert(fake.last_seccomp_action == SCMP_ACT_ERRNO(ENOSYS));
@@ -576,7 +579,7 @@ void test_setup_seccomp_allow_unix(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.seccomp_rule_calls_count ==
-         family_rules() + 6 + sysv_rules() + deny_rules());
+         family_rules() + 6 + clone_ns_rules() + sysv_rules() + deny_rules());
   assert(fake.seccomp_load_calls_count == 1);
 }
 
@@ -589,7 +592,7 @@ void test_setup_seccomp_allow_network(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.seccomp_rule_calls_count ==
-         family_rules() + 4 + sysv_rules() + deny_rules());
+         family_rules() + 4 + clone_ns_rules() + sysv_rules() + deny_rules());
   assert(fake.seccomp_load_calls_count == 1);
 }
 
@@ -603,7 +606,7 @@ void test_setup_seccomp_allow_both(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.seccomp_rule_calls_count ==
-         family_rules() + 3 + sysv_rules() + deny_rules());
+         family_rules() + 3 + clone_ns_rules() + sysv_rules() + deny_rules());
 }
 
 /* --allow-sysv-ipc skips the whole SysV IPC table */
@@ -614,7 +617,8 @@ void test_setup_seccomp_allow_sysv_ipc(void) {
   opts.allow_sysv_ipc = 1;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
-  assert(fake.seccomp_rule_calls_count == family_rules() + 7 + deny_rules());
+  assert(fake.seccomp_rule_calls_count ==
+         family_rules() + 7 + clone_ns_rules() + deny_rules());
   /* the dangerous table is unconditional, so it still resolves its names */
   assert(fake.seccomp_resolve_calls_count == deny_rules());
   assert(fake.seccomp_load_calls_count == 1);
@@ -623,7 +627,7 @@ void test_setup_seccomp_allow_sysv_ipc(void) {
 /* a SysV rule fails: the code says so and the filter is not loaded */
 void test_setup_seccomp_sysv_ipc_error(void) {
   setup_reaches_seccomp();
-  fail_seccomp_rule_at(family_rules() + 8);
+  fail_seccomp_rule_at(family_rules() + 7 + clone_ns_rules() + 1);
 
   struct caged_opts opts = {0};
 
@@ -637,7 +641,7 @@ void test_setup_seccomp_sysv_ipc_error(void) {
 /* the last SysV rule fails: the loop runs the whole table before giving up */
 void test_setup_seccomp_sysv_ipc_last_error(void) {
   setup_reaches_seccomp();
-  fail_seccomp_rule_at(family_rules() + 7 + sysv_rules());
+  fail_seccomp_rule_at(family_rules() + 7 + clone_ns_rules() + sysv_rules());
 
   struct caged_opts opts = {0};
 
@@ -655,14 +659,16 @@ void test_setup_seccomp_sysv_ipc_resolve_error(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSVIPC);
   assert(seccomp_detail == -ENOSYS);
-  assert(fake.seccomp_rule_calls_count == family_rules() + 7 + 2);
+  assert(fake.seccomp_rule_calls_count ==
+         family_rules() + 7 + clone_ns_rules() + 2);
   assert(fake.seccomp_load_calls_count == 0);
 }
 
 /* the first dangerous syscall rule fails: the code says so and names it */
 void test_setup_seccomp_syscalls_error(void) {
   setup_reaches_seccomp();
-  fail_seccomp_rule_at(family_rules() + 7 + sysv_rules() + 1);
+  fail_seccomp_rule_at(family_rules() + 7 + clone_ns_rules() + sysv_rules() +
+                       1);
 
   struct caged_opts opts = {0};
 
@@ -676,7 +682,8 @@ void test_setup_seccomp_syscalls_error(void) {
 /* the last dangerous rule fails: the whole table is walked first */
 void test_setup_seccomp_syscalls_last_error(void) {
   setup_reaches_seccomp();
-  fail_seccomp_rule_at(family_rules() + 7 + sysv_rules() + deny_rules());
+  fail_seccomp_rule_at(family_rules() + 7 + clone_ns_rules() + sysv_rules() +
+                       deny_rules());
 
   struct caged_opts opts = {0};
 
@@ -697,7 +704,7 @@ void test_setup_seccomp_syscalls_resolve_error(void) {
   assert(seccomp_detail == -ENOSYS);
   assert(strcmp(seccomp_failed_syscall, DENY_SYSCALLS[1]) == 0);
   assert(fake.seccomp_rule_calls_count ==
-         family_rules() + 7 + sysv_rules() + 1);
+         family_rules() + 7 + clone_ns_rules() + sysv_rules() + 1);
   assert(fake.seccomp_load_calls_count == 0);
 }
 
@@ -812,6 +819,31 @@ void test_setup_seccomp_network_netlink_error(void) {
   assert(fake.seccomp_load_calls_count == 0);
 }
 
+/* the first namespace flag rule fails */
+void test_setup_seccomp_clone_ns_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 8);
+
+  struct caged_opts opts = {0};
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_CLONE_NS);
+  assert(seccomp_detail == -EINVAL);
+  assert(fake.seccomp_load_calls_count == 0);
+  assert(fake.seccomp_release_calls_count == 1);
+}
+
+/* the last namespace flag rule fails: every flag is walked first */
+void test_setup_seccomp_clone_ns_last_error(void) {
+  setup_reaches_seccomp();
+  fail_seccomp_rule_at(family_rules() + 7 + clone_ns_rules());
+
+  struct caged_opts opts = {0};
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_CLONE_NS);
+  assert(seccomp_detail == -EINVAL);
+  assert(fake.seccomp_load_calls_count == 0);
+}
+
 /* the filter is built but cannot be installed */
 void test_setup_seccomp_load_error(void) {
   setup_reaches_seccomp();
@@ -900,6 +932,7 @@ void test_strreturn(void) {
       CAGED_ERR_SECCOMP_NETLINK,
       CAGED_ERR_SECCOMP_UNIX,
       CAGED_ERR_SECCOMP_NETWORK,
+      CAGED_ERR_SECCOMP_CLONE_NS,
       CAGED_ERR_SECCOMP_SYSVIPC,
       CAGED_ERR_SECCOMP_SYSCALLS,
       CAGED_ERR_SECCOMP_LOAD,
@@ -1045,6 +1078,8 @@ int main(void) {
   test_setup_seccomp_network_error();
   test_setup_seccomp_network_inet6_error();
   test_setup_seccomp_network_netlink_error();
+  test_setup_seccomp_clone_ns_error();
+  test_setup_seccomp_clone_ns_last_error();
   test_setup_seccomp_sysv_ipc_error();
   test_setup_seccomp_sysv_ipc_last_error();
   test_setup_seccomp_sysv_ipc_resolve_error();

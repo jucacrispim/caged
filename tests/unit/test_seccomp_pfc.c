@@ -68,6 +68,7 @@ static void build_and_export(int with_unix, int with_network, char *buf,
   if (with_network) {
     assert(deny_network_sockets(ctx) == 0);
   }
+  assert(deny_clone_namespaces(ctx) == 0);
   assert(deny_sysv_ipc(ctx) == 0);
   assert(deny_dangerous_syscalls(ctx) == 0);
   export_pfc(ctx, buf, size);
@@ -163,10 +164,20 @@ void test_sysv_ipc_denied(void) {
    ENOSYS so callers take their "not implemented" fallback. */
 void test_dangerous_syscalls_denied(void) {
   static const char *names[] = {
-      "ptrace",      "process_vm_readv", "process_vm_writev", "pidfd_getfd",
-      "process_madvise", "kcmp",         "keyctl",            "add_key",
-      "request_key", "io_uring_setup",   "bpf",               "perf_event_open",
-      "userfaultfd",
+      "ptrace",          "process_vm_readv", "process_vm_writev",
+      "pidfd_getfd",     "process_madvise",  "process_mrelease",
+      "kcmp",            "keyctl",           "add_key",
+      "request_key",     "io_uring_setup",   "bpf",
+      "perf_event_open", "userfaultfd",      "init_module",
+      "finit_module",    "delete_module",    "kexec_load",
+      "kexec_file_load", "reboot",           "swapon",
+      "swapoff",         "acct",             "quotactl",
+      "iopl",            "ioperm",           "modify_ldt",
+      "open_by_handle_at", "unshare",        "setns",
+      "mount",           "umount2",          "pivot_root",
+      "chroot",          "move_mount",       "open_tree",
+      "fsopen",          "fsconfig",         "fsmount",
+      "fspick",          "mount_setattr",    "clone3",
   };
   char buf[262144];
   char needle[96];
@@ -186,12 +197,40 @@ void test_dangerous_syscalls_denied(void) {
   assert(p != NULL);
 }
 
+/* clone() is filtered by flag, one masked comparison per namespace, so a
+   call asking for any of them is denied. clone3() cannot be filtered that
+   way (its flags are behind a pointer) and is denied whole. */
+void test_clone_namespaces_denied(void) {
+  char buf[262144];
+  char needle[128];
+  const char *p;
+
+  build_and_export(1, 1, buf, sizeof buf);
+
+  p = strstr(buf, "# filter for syscall \"clone\" (");
+  assert(p != NULL);
+  for (size_t k = 0; k < CLONE_NS_N; k++) {
+    unsigned long long flag = CLONE_NS_FLAGS[k];
+    snprintf(needle, sizeof needle, "$a0.lo32 & 0x%08llx == %llu)", flag, flag);
+    assert(strstr(p, needle) != NULL);
+  }
+
+  /* a bit outside the table is not blocked: the table is what decides */
+  assert(strstr(p, "$a0.lo32 & 0x00800000") == NULL);
+
+  p = strstr(buf, "# filter for syscall \"clone3\" (");
+  assert(p != NULL);
+  p = strstr(p, "action ERRNO(38);");
+  assert(p != NULL);
+}
+
 int main(void) {
   test_default_seccomp_filter();
   test_allow_unix_sockets();
   test_allow_network_sockets();
   test_sysv_ipc_denied();
   test_dangerous_syscalls_denied();
+  test_clone_namespaces_denied();
 
   printf("OK\n");
   return 0;

@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <linux/landlock.h>
 #include <linux/netlink.h>
+#include <sched.h>
 #include <seccomp.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,22 +114,69 @@ static const char *SYSV_IPC_SYSCALLS[] = {
 };
 
 /*
-  Syscalls that act on other processes or use shared memory are blocked
+  Namespace flags for clone().
+*/
+static const unsigned long long CLONE_NS_FLAGS[] = {
+    CLONE_NEWNS,   CLONE_NEWCGROUP, CLONE_NEWUTS, CLONE_NEWIPC,
+    CLONE_NEWUSER, CLONE_NEWPID,    CLONE_NEWNET, CLONE_NEWTIME,
+};
+
+#define CLONE_NS_N (sizeof CLONE_NS_FLAGS / sizeof CLONE_NS_FLAGS[0])
+
+/*
+  Syscalls that escape the sandbox, act on other processes or attack the
+  kernel are blocked. They will return ENOSYS.
 */
 static const char *DENY_SYSCALLS[] = {
+    /* inspect or write the memory of another process */
     "ptrace",
     "process_vm_readv",
     "process_vm_writev",
     "pidfd_getfd",
     "process_madvise",
+    "process_mrelease",
     "kcmp",
+    /* the caller's own keyrings */
     "keyctl",
     "add_key",
     "request_key",
+    /* kernel attack surface */
     "io_uring_setup",
     "bpf",
     "perf_event_open",
     "userfaultfd",
+    /* load code into the kernel, or take the machine down */
+    "init_module",
+    "finit_module",
+    "delete_module",
+    "kexec_load",
+    "kexec_file_load",
+    "reboot",
+    "swapon",
+    "swapoff",
+    "acct",
+    "quotactl",
+    "iopl",
+    "ioperm",
+    "modify_ldt",
+    "open_by_handle_at",
+    /*
+      Mounting and namespaces
+    */
+    "unshare",
+    "setns",
+    "mount",
+    "umount2",
+    "pivot_root",
+    "chroot",
+    "move_mount",
+    "open_tree",
+    "fsopen",
+    "fsconfig",
+    "fsmount",
+    "fspick",
+    "mount_setattr",
+    "clone3",
 };
 
 #define SYSV_IPC_N (sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0])
@@ -457,6 +505,22 @@ static int deny_network_sockets(scmp_filter_ctx ctx) {
 }
 
 /*
+  Blocks a clone() with new namespace.
+*/
+static int deny_clone_namespaces(scmp_filter_ctx ctx) {
+  for (size_t k = 0; k < CLONE_NS_N; k++) {
+    unsigned long long flag = CLONE_NS_FLAGS[k];
+    int r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(ENOSYS), SCMP_SYS(clone),
+                                   1, SCMP_A0(SCMP_CMP_MASKED_EQ, flag, flag));
+    if (r < 0) {
+      seccomp_detail = r;
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/*
   Denies each named syscall with ENOSYS. A name libseccomp cannot resolve
   returns an error.
 */
@@ -531,6 +595,10 @@ static enum caged_return apply_seccomp(int allow_unix_sockets,
   if (!allow_network_sockets && deny_network_sockets(ctx) < 0) {
     seccomp_release(ctx);
     return CAGED_ERR_SECCOMP_NETWORK;
+  }
+  if (deny_clone_namespaces(ctx) < 0) {
+    seccomp_release(ctx);
+    return CAGED_ERR_SECCOMP_CLONE_NS;
   }
   if (!allow_sysv_ipc && deny_sysv_ipc(ctx) < 0) {
     seccomp_release(ctx);
@@ -734,6 +802,8 @@ const char *caged_strreturn(enum caged_return r) {
     return "error denying unix sockets";
   case CAGED_ERR_SECCOMP_NETWORK:
     return "error denying network sockets";
+  case CAGED_ERR_SECCOMP_CLONE_NS:
+    return "error denying namespace clones";
   case CAGED_ERR_SECCOMP_SYSVIPC:
     return "error denying sysv ipc";
   case CAGED_ERR_SECCOMP_SYSCALLS:
