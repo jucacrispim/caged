@@ -4,10 +4,10 @@ Architecture
 caged is split in five files, along a library / command-line boundary:
 
 ``caged.h``
-    The public interface. It holds ``enum caged_return``, ``struct cmd_opts``,
+    The public interface. It holds ``enum caged_return``, ``struct caged_opts``,
     the diagnostics globals (``seccomp_detail``, ``seccomp_failed_family``,
     ``seccomp_failed_syscall``, ``abi_found``), the declarations of
-    ``caged_setup``, ``caged_strreturn`` and ``cmd_opts_free`` — the pieces a
+    ``caged_setup``, ``caged_strreturn`` and ``caged_opts_free`` — the pieces a
     program embedding caged needs — and the ``LANDLOCK_*`` fallback macros the
     headers of an older system lack.
 
@@ -85,16 +85,17 @@ Main and the testable core
 .. code-block:: c
 
    int main(int argc, char *argv[]) {
-     struct cmd_opts opts = {0};
+     struct caged_opts opts = {0};
+     char **cmd = NULL;
 
-     if (parse_cmd_line(argc, argv, &opts) < 0) {
-       cmd_opts_free(&opts);
+     if (parse_cmd_line(argc, argv, &opts, &cmd) < 0) {
+       caged_opts_free(&opts);
        return 2;
      }
 
      if (opts.help) {
        print_help(stdout);
-       cmd_opts_free(&opts);
+       caged_opts_free(&opts);
        return 0;
      }
 
@@ -118,9 +119,9 @@ Main and the testable core
      }
 
      warn_unsupported_features(abi_found);
-     cmd_opts_free(&opts);
+     caged_opts_free(&opts);
      /* execvpe searches with the *caller's* PATH, not with envp. */
-     if (execvpe(opts.cmd[0], opts.cmd, envp) < 0) {
+     if (execvpe(cmd[0], cmd, envp) < 0) {
        die("error execvpe");
      }
      return 1;
@@ -167,14 +168,14 @@ added but not handled.
 Options and parsing
 -------------------
 
-All command-line state lives in ``struct cmd_opts`` (declared in ``caged.h``
+All command-line state lives in ``struct caged_opts`` (declared in ``caged.h``
 because ``caged_setup`` takes it, filled by ``cli.c``). The path and port lists
 are dynamic and grow by doubling their capacity (``push_path`` / ``push_port``),
 so there is no fixed upper bound:
 
 .. code-block:: c
 
-   struct cmd_opts {
+   struct caged_opts {
      const char **r_dir;      int n_r;   int cap_r;
      const char **rw_dir;     int n_rw;  int cap_rw;
      unsigned long long released_scopes;
@@ -189,7 +190,6 @@ so there is no fixed upper bound:
      long require_abi;
      int keep_env;
      char **env;              int n_env;  int cap_env;
-     char **cmd;
      int help;
    };
 
@@ -199,9 +199,15 @@ failures use ``die`` (which appends ``strerror(errno)``, and lives in
 ``main.c``). Running with no arguments is the one usage error that also prints
 the help, on stderr.
 
-``struct cmd_opts.cmd`` note: ``cmd`` is ``char **`` (not
-``const char **``) because it points into ``argv`` — converting away the const
-would be a hole in the type system.
+The command to run is **not** one of the fields: ``parse_cmd_line`` hands it
+back through its last parameter (``char ***cmd``), pointing into ``argv``. It
+stays ``NULL`` when the parse stops before a command (``--help``, or a usage
+error), so the front end can tell "run this" from "nothing to run". Keeping it
+out of ``caged_opts`` says the truth about who reads it: ``caged_setup`` never
+does, only the ``main`` that ``execvpe``\s it.
+
+``cmd`` is ``char **`` (not ``const char **``) because it points into
+``argv`` — converting away the const would be a hole in the type system.
 
 Filesystem rules
 ----------------

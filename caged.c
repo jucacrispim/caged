@@ -18,10 +18,8 @@
 */
 
 /*
-  The sandbox itself: ABI gating, the Landlock ruleset and its rules, the
-  seccomp filter and the resource limits. This file is meant to be linkable as
-  a library; nothing here parses argv or prints anything for the user. The
-  command-line front end lives in cli.c and main.c.
+  The sandbox. The Landlock ruleset and its rules, the
+  seccomp filter, the resource limits and environment variables stuff.
 */
 
 #define _GNU_SOURCE
@@ -493,13 +491,6 @@ static int deny_dangerous_syscalls(scmp_filter_ctx ctx) {
 
 /*
   Builds and loads the seccomp filter.
-
-  `tsync` mirrors the Landlock restrict-self flag of the same name: the filter
-  is then applied to every thread of the thread group, not only to the calling
-  one. Without it a thread that already exists (a sibling) keeps running
-  unfiltered; a process forked from another branch is out of reach either way.
-  Calling seccomp_load with the flag set can return the tid of a thread that
-  failed to synchronize instead of -1, so the load is checked against 0.
 */
 static enum caged_return apply_seccomp(int allow_unix_sockets,
                                        int allow_network_sockets,

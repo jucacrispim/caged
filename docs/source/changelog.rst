@@ -1,6 +1,50 @@
 Changelog
 =========
 
+v0.7.0
+------
+
+Seventh release. No behaviour change: same command-line options, same policy,
+same fields. It is the naming pass that lines the public interface up with
+itself.
+
+Breaking changes
+~~~~~~~~~~~~~~~~
+
+- ``struct cmd_opts`` is now ``struct caged_opts``, and ``cmd_opts_free`` is
+  now ``caged_opts_free``. An embedder updates the type name and the call and
+  recompiles; a wrapper that only runs the ``caged`` binary is unaffected.
+  The fields, their meaning and the ``caged_setup`` / ``caged_strreturn`` /
+  ``enum caged_return`` interface are untouched.
+- Why: the rest of the public surface already carries the ``caged_`` prefix
+  (``caged_setup``, ``caged_strreturn``, ``caged_return``, ``caged.h``),
+  while the options struct and its destructor carried a ``cmd_`` prefix that
+  described the command-line front end and not the library. Two prefixes in
+  one header invite the guess that ``cmd_`` marks a front-end-only type; it
+  does not — ``parse_cmd_line`` fills the same struct the embedder fills by
+  hand.
+- ``struct caged_opts`` lost the ``cmd`` field. ``parse_cmd_line`` now takes
+  the command as its last parameter, ``char ***cmd``: it receives a pointer to
+  the NULL-terminated ``argv`` tail after ``--``, or stays ``NULL`` when the
+  parse stops before a command (``--help``, or a usage error). Nothing is
+  allocated, so nothing is freed. ``cmd`` was the only field ``caged_setup``
+  never read — it existed for the ``main`` that ``execvpe``\s — and a field
+  nothing in the library reads does not belong in the library's struct.
+
+Upgrading
+~~~~~~~~~
+
+- Replace ``struct cmd_opts`` with ``struct caged_opts`` (declarations,
+  definitions, pointers and casts) and ``cmd_opts_free`` with
+  ``caged_opts_free``. The rename is mechanical: ``sed -i
+  's/cmd_opts/caged_opts/g' your_sources`` covers it.
+- Embedders are not affected by the ``cmd`` change unless they drive
+  ``parse_cmd_line``: they never filled ``cmd`` (they keep their own array for
+  ``exec``). A caller of ``parse_cmd_line`` adds the parameter —
+  ``parse_cmd_line(argc, argv, &opts, &cmd)`` — or passes ``NULL`` when it only
+  wants the options, as the unit tests mostly do. The front end in ``main.c``
+  is the example to copy.
+
 v0.6.0
 ------
 

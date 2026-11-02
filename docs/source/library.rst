@@ -30,7 +30,7 @@ target; :doc:`installation` explains that even the binary is copied to
 A minimal embedder
 ------------------
 
-Fill a ``struct cmd_opts``, call ``caged_setup``, treat anything other than
+Fill a ``struct caged_opts``, call ``caged_setup``, treat anything other than
 ``CAGED_OK`` as fatal, and hand the returned environment to the ``exec``:
 
 .. code-block:: c
@@ -47,7 +47,7 @@ Fill a ``struct cmd_opts``, call ``caged_setup``, treat anything other than
      const char *ro[] = {"/usr", "/bin", "/lib", "/lib64", "/etc"};
      unsigned short ports[] = {443};
 
-     struct cmd_opts opts = {0};
+     struct caged_opts opts = {0};
      opts.r_dir = ro;
      opts.n_r = 5;
      opts.connect_ports = ports;
@@ -73,8 +73,10 @@ Fill a ``struct cmd_opts``, call ``caged_setup``, treat anything other than
      return 1;
    }
 
-Note that ``cmd`` and ``help`` are not used by the library; they exist for the
-command-line front end.
+Note that ``help`` is not used by the library; it exists for the command-line
+front end, like the ``parse_cmd_line`` that fills the struct from ``argv``.
+The command to run is not a field either: ``parse_cmd_line`` returns it through
+its last parameter, so the embedder simply keeps its own ``cmd`` array.
 
 What ``caged_setup`` changes
 ----------------------------
@@ -97,7 +99,7 @@ before starting threads. A sibling **process** (a ``fork`` from another thread
 group) is out of reach for both layers: the sandbox only descends the tree of
 descendants. Confine each process at its own launch instead.
 
-Filling ``struct cmd_opts``
+Filling ``struct caged_opts``
 ---------------------------
 
 Every field mirrors a command-line option; see :doc:`usage` for the semantics.
@@ -158,7 +160,7 @@ are ignored by ``caged_setup``.
 
 .. warning::
 
-   ``cmd_opts_free`` frees the arrays the **parser** allocated (``r_dir``,
+   ``caged_opts_free`` frees the arrays the **parser** allocated (``r_dir``,
    ``rw_dir``, ``connect_ports``, ``bind_ports``, ``env``). An embedder that
    fills the struct with its own static or stack arrays must not call it.
 
