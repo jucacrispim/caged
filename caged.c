@@ -18,19 +18,23 @@
 */
 
 /*
-  The sandbox. The Landlock ruleset and its rules, the
-  seccomp filter, the resource limits and environment variables stuff.
+  The sandbox. The namespaces it can build for the command, the Landlock
+  ruleset and its rules, the seccomp filter, the resource limits and the
+  environment variables stuff.
 */
 
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/capability.h>
 #include <linux/landlock.h>
 #include <linux/netlink.h>
+#include <net/if.h>
 #include <sched.h>
 #include <seccomp.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -45,6 +49,11 @@
 #ifndef SOCK_TYPE_MASK
 #define SOCK_TYPE_MASK 0xf
 #endif
+
+/* The user namespace configuration is write-only and lives in /proc. */
+#define PROC_SELF_SETGROUPS "/proc/self/setgroups"
+#define PROC_SELF_UID_MAP "/proc/self/uid_map"
+#define PROC_SELF_GID_MAP "/proc/self/gid_map"
 
 /* fs access handled by the latest api */
 #define FS_HANDLED                                                             \
@@ -739,13 +748,134 @@ static int apply_rlimits(long max_procs) {
   return 0;
 }
 
+static int write_file(const char *path, const char *text) {
+  size_t len = strlen(text);
+  int fd = open(path, O_WRONLY | O_CLOEXEC);
+
+  if (fd < 0) {
+    return -1;
+  }
+  ssize_t written = write(fd, text, len);
+  int write_errno = errno;
+  close(fd);
+  if (written < 0) {
+    errno = write_errno;
+    return -1;
+  }
+  if ((size_t)written != len) {
+    /*
+      If written bytes is different than the text len it is a error
+      because a trucated write could match a wrong user.
+     */
+    errno = EIO;
+    return -1;
+  }
+  return 0;
+}
+
 /*
-  Closes every file descriptor inherited above stderr, except `report_fd` when
-  one was requested: that descriptor is the out-of-band channel the front end
-  reports setup failures through, so it has to survive the sweep. It is marked
-  FD_CLOEXEC by caged_setup, so the command still does not inherit it. The
-  range is therefore split around it (and the empty half is skipped: the
-  kernel rejects a first > last range).
+  Writes an id map that maps the caller's own id to itself.
+*/
+static int write_id_map(const char *path, unsigned int id) {
+  char map[64];
+
+  (void)snprintf(map, sizeof map, "%u %u 1\n", id, id);
+  return write_file(path, map);
+}
+
+/*
+  Brings loopback up in the current network namespace.
+  When a new namespace is created, a loopback interface is
+  created but it's down.
+*/
+static int loopback_up(void) {
+  struct ifreq ifr = {0};
+  int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+
+  if (fd < 0) {
+    return -1;
+  }
+  memcpy(ifr.ifr_name, "lo", sizeof "lo");
+  if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
+    close(fd);
+    return -1;
+  }
+  ifr.ifr_flags = (short)(ifr.ifr_flags | IFF_UP);
+  if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0) {
+    close(fd);
+    return -1;
+  }
+  close(fd);
+  return 0;
+}
+
+/*
+  Removes every capability from the process.
+
+  An EINVAL from PR_CAPBSET_DROP only means this kernel does not know the
+  capability number, so it is not a failure.
+*/
+static int drop_capabilities(void) {
+  struct __user_cap_header_struct header = {
+      .version = _LINUX_CAPABILITY_VERSION_3,
+      .pid = 0,
+  };
+  struct __user_cap_data_struct data[2] = {{0}};
+
+  for (int c = 0; c <= CAP_LAST_CAP; c++) {
+    if (prctl(PR_CAPBSET_DROP, c, 0, 0, 0) < 0 && errno != EINVAL) {
+      return -1;
+    }
+  }
+  if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) < 0) {
+    return -1;
+  }
+  if (syscall(SYS_capset, &header, data) < 0) {
+    return -1;
+  }
+  return 0;
+}
+
+/*
+  Creates a new user namespace with a loopback network interface only
+*/
+static enum caged_return setup_loopback_only(void) {
+  unsigned int uid = (unsigned int)geteuid();
+  unsigned int gid = (unsigned int)getegid();
+
+  if (unshare(CLONE_NEWUSER) < 0) {
+    return CAGED_ERR_USERNS_UNAVAILABLE;
+  }
+  /*
+    Writing "deny" to setgroups is what lets an unprivileged process write a
+    gid map.
+  */
+  if (write_file(PROC_SELF_SETGROUPS, "deny") < 0) {
+    return CAGED_ERR_USERNS_MAP;
+  }
+  if (write_id_map(PROC_SELF_UID_MAP, uid) < 0) {
+    return CAGED_ERR_USERNS_MAP;
+  }
+  if (write_id_map(PROC_SELF_GID_MAP, gid) < 0) {
+    return CAGED_ERR_USERNS_MAP;
+  }
+  if (unshare(CLONE_NEWNET) < 0) {
+    return CAGED_ERR_NETNS;
+  }
+  if (loopback_up() < 0) {
+    return CAGED_ERR_NETNS;
+  }
+  /* drop_capabilities must be called before returning the function.
+     A sandbox with capabilities is easily escaped
+  */
+  if (drop_capabilities() < 0) {
+    return CAGED_ERR_CAPABILITIES;
+  }
+  return CAGED_OK;
+}
+
+/*
+  Closes every file descriptor inherited above stderr, except `report_fd.
 */
 static int close_inherited_fds(int report_fd) {
   if (report_fd < 3) {
@@ -758,9 +888,7 @@ static int close_inherited_fds(int report_fd) {
 }
 
 /*
-  True when the kernel's Landlock ABI meets the --require-abi floor. A floor
-  of 0 means "no requirement": caged then only warns about the features the
-  ABI lacks, which is the fail-open behaviour.
+  True when the kernel's Landlock ABI meets the --require-abi floor.
 */
 static int abi_satisfies(long abi, long require) {
   return require <= 0 || abi >= require;
@@ -816,6 +944,14 @@ const char *caged_strreturn(enum caged_return r) {
     return "error building the environment";
   case CAGED_ERR_REPORT_FD:
     return "error setting the report descriptor";
+  case CAGED_ERR_USERNS_UNAVAILABLE:
+    return "error creating the user namespace";
+  case CAGED_ERR_USERNS_MAP:
+    return "error writing the user namespace id maps";
+  case CAGED_ERR_NETNS:
+    return "error setting up the loopback network namespace";
+  case CAGED_ERR_CAPABILITIES:
+    return "error dropping capabilities";
   }
   return "unknown error";
 }
@@ -843,6 +979,16 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
   if (apply_rlimits(opts->max_procs) < 0) {
     return CAGED_ERR_RLIMIT;
   }
+  /*
+    The namespace must come before landlock and seccomp. It needs that will
+    be denied by them.
+  */
+  if (opts->loopback_only) {
+    enum caged_return ns = setup_loopback_only();
+    if (ns != CAGED_OK) {
+      return ns;
+    }
+  }
   long abi = check_abi();
   abi_found = abi;
   if (abi < 1) {
@@ -859,9 +1005,7 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
       .handled_access_net = handled_net & ~opts->released_net,
       .scoped = get_handled_scopes(abi) & ~opts->released_scopes,
   };
-  /* create_ruleset reports the raw syscall result, a long. The descriptor
-     itself is an int (as is parent_fd in the landlock structs), so the
-     narrowing is explicit and happens once, after the error check. */
+  /* create_ruleset reports the raw syscall result */
   long ruleset_ret = create_ruleset(&r_perm);
   if (ruleset_ret < 0) {
     return CAGED_ERR_CREATE_RULESET;

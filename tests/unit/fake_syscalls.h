@@ -109,6 +109,64 @@ struct fake_context {
   int last_close_range_flags;
   /* seccomp_load() count at the moment close_range() ran */
   int close_range_seen_loads;
+
+  /* user/network namespace setup (--loopback-only) */
+  int unshare_ret;
+  int unshare_err;
+  /* Fail only the Nth unshare() call (1 = user namespace, 2 = network
+     namespace). 0 fails every call when unshare_ret is negative. */
+  int unshare_fail_at;
+  int socket_fd;
+  int socket_err;
+  int ioctl_ret;
+  int ioctl_err;
+  /* Fail only the Nth ioctl() call (1 = SIOCGIFFLAGS, 2 = SIOCSIFFLAGS). */
+  int ioctl_fail_at;
+  /* flags SIOCGIFFLAGS reports back */
+  short ioctl_flags;
+  int capset_ret;
+  int capset_err;
+  int capbset_drop_ret;
+  int capbset_drop_err;
+  int ambient_ret;
+  int ambient_err;
+  int proc_open_fd;
+  int proc_open_fail;
+  /* Fail only the Nth /proc/self open (1 = setgroups, 2 = uid_map,
+     3 = gid_map). 0 fails every call when proc_open_fail is set. */
+  int proc_open_fail_at;
+  int proc_open_err;
+  /* Negative fails the write; 0 writes everything; positive writes that many
+     bytes, which is how a short write is simulated. */
+  int write_ret;
+  int write_err;
+
+  /* namespace spies */
+  int unshare_calls_count;
+  unsigned long last_unshare_flags;
+  int socket_calls_count;
+  int last_socket_family;
+  int last_socket_type;
+  int socket_close_calls_count;
+  int ioctl_calls_count;
+  unsigned long last_ioctl_request;
+  short last_ioctl_flags;
+  int capset_calls_count;
+  unsigned long last_capset_version;
+  unsigned long last_capset_permitted;
+  unsigned long last_capset_effective;
+  int capbset_drop_calls_count;
+  int last_capbset_cap;
+  int ambient_calls_count;
+  int last_ambient_option;
+  int proc_open_calls_count;
+  const char *last_proc_path;
+  int proc_close_calls_count;
+  int write_calls_count;
+  char last_write[64];
+  /* every /proc entry opened and every line written, in order */
+  const char *proc_paths[8];
+  char proc_writes[8][64];
 };
 
 extern struct fake_context fake;

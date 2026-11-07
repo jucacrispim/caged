@@ -912,6 +912,288 @@ void test_setup_seccomp_load_tid(void) {
   assert(fake.seccomp_release_calls_count == 1);
 }
 
+/*
+  --loopback-only: the sandbox builds a user and a network namespace of its
+  own, brings loopback up, drops every capability -- and only then builds the
+  policy, because the namespaces have to exist before seccomp denies the
+  unshare() that makes them.
+*/
+void test_setup_loopback_only_ok(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  /* user namespace first, network namespace after the maps */
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.last_unshare_flags == (unsigned long)CLONE_NEWNET);
+  /* setgroups, uid_map, gid_map, in that order: the kernel requires it */
+  assert(fake.proc_open_calls_count == 3);
+  assert(strcmp(fake.proc_paths[0], "/proc/self/setgroups") == 0);
+  assert(strcmp(fake.proc_paths[1], "/proc/self/uid_map") == 0);
+  assert(strcmp(fake.proc_paths[2], "/proc/self/gid_map") == 0);
+  assert(strcmp(fake.proc_writes[0], "deny") == 0);
+  char expected[64];
+  snprintf(expected, sizeof expected, "%u %u 1\n", (unsigned)geteuid(),
+           (unsigned)geteuid());
+  assert(strcmp(fake.proc_writes[1], expected) == 0);
+  snprintf(expected, sizeof expected, "%u %u 1\n", (unsigned)getegid(),
+           (unsigned)getegid());
+  assert(strcmp(fake.proc_writes[2], expected) == 0);
+  /* loopback is brought up. Only IFF_UP is requested: IFF_RUNNING is not
+     settable from userspace, the kernel recomputes it from the device. */
+  assert(fake.socket_calls_count == 1);
+  assert(fake.last_socket_family == AF_INET);
+  assert(fake.last_socket_type == (SOCK_DGRAM | SOCK_CLOEXEC));
+  assert(fake.ioctl_calls_count == 2);
+  assert(fake.last_ioctl_request == SIOCSIFFLAGS);
+  assert((fake.last_ioctl_flags & IFF_UP) != 0);
+  /* the bounding set is what execve may hand out: it is emptied first */
+  assert(fake.capbset_drop_calls_count == CAP_LAST_CAP + 1);
+  assert(fake.last_capbset_cap == CAP_LAST_CAP);
+  assert(fake.ambient_calls_count == 1);
+  assert(fake.last_ambient_option == PR_CAP_AMBIENT_CLEAR_ALL);
+  assert(fake.capset_calls_count == 1);
+  assert(fake.last_capset_version == _LINUX_CAPABILITY_VERSION_3);
+  assert(fake.last_capset_permitted == 0);
+  assert(fake.last_capset_effective == 0);
+  /* and the policy still happens, with the filter loaded */
+  assert(fake.create_calls_count == 1);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* without the flag nothing namespace-related happens */
+void test_setup_no_loopback_by_default(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.unshare_calls_count == 0);
+  assert(fake.proc_open_calls_count == 0);
+  assert(fake.ioctl_calls_count == 0);
+  assert(fake.capbset_drop_calls_count == 0);
+  assert(fake.capset_calls_count == 0);
+  assert(fake.create_calls_count == 1);
+}
+
+/* the host forbids user namespaces (EPERM) or the process has more than one
+   thread (EINVAL): the setup fails instead of running without the namespace */
+void test_setup_loopback_userns_unavailable(void) {
+  setup_reaches_seccomp();
+  fake.unshare_ret = -1;
+  fake.unshare_err = EPERM;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_UNAVAILABLE);
+  assert(errno == EPERM);
+  assert(fake.create_calls_count == 0);
+  assert(fake.proc_open_calls_count == 0);
+  assert(fake.close_range_calls_count == 0);
+}
+
+/* setgroups cannot be written: no gid map is possible after it */
+void test_setup_loopback_setgroups_error(void) {
+  setup_reaches_seccomp();
+  fake.proc_open_fail = 1;
+  fake.proc_open_fail_at = 1;
+  fake.proc_open_err = EACCES;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_MAP);
+  assert(errno == EACCES);
+  assert(fake.write_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
+/* the uid map cannot be opened */
+void test_setup_loopback_uid_map_error(void) {
+  setup_reaches_seccomp();
+  fake.proc_open_fail = 1;
+  fake.proc_open_fail_at = 2;
+  fake.proc_open_err = EACCES;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_MAP);
+  assert(fake.proc_open_calls_count == 2);
+  /* the network namespace is only created after both maps */
+  assert(fake.unshare_calls_count == 1);
+}
+
+/* the gid map cannot be opened */
+void test_setup_loopback_gid_map_error(void) {
+  setup_reaches_seccomp();
+  fake.proc_open_fail = 1;
+  fake.proc_open_fail_at = 3;
+  fake.proc_open_err = EACCES;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_MAP);
+  assert(fake.proc_open_calls_count == 3);
+  assert(fake.unshare_calls_count == 1);
+}
+
+/* the entry opens but the write fails */
+void test_setup_loopback_write_error(void) {
+  setup_reaches_seccomp();
+  fake.write_ret = -1;
+  fake.write_err = ENOSPC;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_MAP);
+  assert(errno == ENOSPC);
+}
+
+/* a short write is an error: a truncated id map maps the wrong thing */
+void test_setup_loopback_write_short(void) {
+  setup_reaches_seccomp();
+  fake.write_ret = 1;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_MAP);
+  assert(errno == EIO);
+}
+
+/* the second unshare (the network namespace) fails */
+void test_setup_loopback_netns_error(void) {
+  setup_reaches_seccomp();
+  fake.unshare_ret = -1;
+  fake.unshare_err = EINVAL;
+  fake.unshare_fail_at = 2;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_NETNS);
+  assert(errno == EINVAL);
+  assert(fake.create_calls_count == 0);
+  assert(fake.socket_calls_count == 0);
+}
+
+/* the socket used to bring loopback up cannot be created */
+void test_setup_loopback_socket_error(void) {
+  setup_reaches_seccomp();
+  fake.socket_fd = -1;
+  fake.socket_err = EMFILE;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_NETNS);
+  assert(errno == EMFILE);
+  assert(fake.ioctl_calls_count == 0);
+}
+
+/* reading the current interface flags fails */
+void test_setup_loopback_get_flags_error(void) {
+  setup_reaches_seccomp();
+  fake.ioctl_ret = -1;
+  fake.ioctl_err = EINVAL;
+  fake.ioctl_fail_at = 1;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_NETNS);
+  assert(fake.ioctl_calls_count == 1);
+  /* the socket is not leaked on the error path */
+  assert(fake.socket_close_calls_count == 1);
+}
+
+/* setting the interface up fails */
+void test_setup_loopback_set_flags_error(void) {
+  setup_reaches_seccomp();
+  fake.ioctl_ret = -1;
+  fake.ioctl_err = EINVAL;
+  fake.ioctl_fail_at = 2;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_NETNS);
+  assert(fake.ioctl_calls_count == 2);
+  assert(fake.socket_close_calls_count == 1);
+  assert(fake.capset_calls_count == 0);
+}
+
+/* dropping a capability from the bounding set fails */
+void test_setup_loopback_capbset_error(void) {
+  setup_reaches_seccomp();
+  fake.capbset_drop_ret = -1;
+  fake.capbset_drop_err = EPERM;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_CAPABILITIES);
+  assert(errno == EPERM);
+  /* it stops at the first one instead of walking the whole set */
+  assert(fake.capbset_drop_calls_count == 1);
+  assert(fake.create_calls_count == 0);
+}
+
+/* EINVAL only means this kernel does not know that capability number */
+void test_setup_loopback_capbset_unknown_cap(void) {
+  setup_reaches_seccomp();
+  fake.capbset_drop_ret = -1;
+  fake.capbset_drop_err = EINVAL;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.capbset_drop_calls_count == CAP_LAST_CAP + 1);
+  assert(fake.capset_calls_count == 1);
+}
+
+/* the ambient set cannot be cleared */
+void test_setup_loopback_ambient_error(void) {
+  setup_reaches_seccomp();
+  fake.ambient_ret = -1;
+  fake.ambient_err = EINVAL;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_CAPABILITIES);
+  assert(fake.capset_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
+/* the capability sets cannot be cleared */
+void test_setup_loopback_capset_error(void) {
+  setup_reaches_seccomp();
+  fake.capset_ret = -1;
+  fake.capset_err = EPERM;
+
+  struct caged_opts opts = {0};
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_CAPABILITIES);
+  assert(fake.capset_calls_count == 1);
+  assert(fake.create_calls_count == 0);
+}
+
 /* test if every  return code have a message */
 void test_strreturn(void) {
   enum caged_return codes[] = {
@@ -939,6 +1221,10 @@ void test_strreturn(void) {
       CAGED_ERR_SECCOMP_TSYNC,
       CAGED_ERR_ENV,
       CAGED_ERR_REPORT_FD,
+      CAGED_ERR_USERNS_UNAVAILABLE,
+      CAGED_ERR_USERNS_MAP,
+      CAGED_ERR_NETNS,
+      CAGED_ERR_CAPABILITIES,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
     const char *msg = caged_strreturn(codes[i]);
@@ -1091,6 +1377,22 @@ int main(void) {
   test_setup_seccomp_no_tsync();
   test_setup_seccomp_tsync_error();
   test_setup_seccomp_load_tid();
+  test_setup_loopback_only_ok();
+  test_setup_no_loopback_by_default();
+  test_setup_loopback_userns_unavailable();
+  test_setup_loopback_setgroups_error();
+  test_setup_loopback_uid_map_error();
+  test_setup_loopback_gid_map_error();
+  test_setup_loopback_write_error();
+  test_setup_loopback_write_short();
+  test_setup_loopback_netns_error();
+  test_setup_loopback_socket_error();
+  test_setup_loopback_get_flags_error();
+  test_setup_loopback_set_flags_error();
+  test_setup_loopback_capbset_error();
+  test_setup_loopback_capbset_unknown_cap();
+  test_setup_loopback_ambient_error();
+  test_setup_loopback_capset_error();
   test_strreturn();
   test_strreturn_unknown_error();
   test_warn_none_when_all_supported();

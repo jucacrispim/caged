@@ -108,6 +108,8 @@ void print_help(FILE *out) {
       "  --allow-unix-sockets           allow AF_UNIX sockets (IPC)\n"
       "  --allow-network-sockets        allow AF_INET, AF_INET6, AF_NETLINK\n"
       "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"
+      "  --loopback-only                give the command its own network\n"
+      "                                 namespace with only loopback up\n"
       "  --max-procs N                  set RLIMIT_NPROC to N (default: no "
       "limit)\n"
       "  --require-abi N                fail unless Landlock ABI >= N\n"
@@ -321,6 +323,9 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       i += 1;
     } else if (strcmp(argv[i], "--allow-sysv-ipc") == 0) {
       opts->allow_sysv_ipc = 1;
+      i += 1;
+    } else if (strcmp(argv[i], "--loopback-only") == 0) {
+      opts->loopback_only = 1;
       i += 1;
     } else if (strcmp(argv[i], "--max-procs") == 0) {
       if (i + 1 >= argc) {

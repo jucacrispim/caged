@@ -80,6 +80,10 @@ enum caged_return {
   CAGED_ERR_SECCOMP_TSYNC,
   CAGED_ERR_ENV,
   CAGED_ERR_REPORT_FD,
+  CAGED_ERR_USERNS_UNAVAILABLE,
+  CAGED_ERR_USERNS_MAP,
+  CAGED_ERR_NETNS,
+  CAGED_ERR_CAPABILITIES,
 };
 
 struct caged_opts {
@@ -101,6 +105,15 @@ struct caged_opts {
   int allow_unix_sockets;
   int allow_network_sockets;
   int allow_sysv_ipc;
+  /*
+    Give the command a network namespace of its own, holding nothing but a
+    working loopback interface: no route, no external address, no way to
+    reach the host's (or another sandbox's) localhost. It is orthogonal to
+    allow_network_sockets on purpose — without the address family released
+    the command cannot even create the socket, and releasing the family
+    without this option still means "the whole network".
+  */
+  int loopback_only;
   long max_procs;
   long require_abi;
   int keep_env;

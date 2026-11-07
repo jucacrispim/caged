@@ -5,7 +5,8 @@ CFLAGS      := -Wall -Wextra -g
 LDLIBS      := -lseccomp
 TEST_CFLAGS := $(CFLAGS) -O0 -U_FORTIFY_SOURCE -fno-builtin
 WRAP        := -Wl,--wrap=syscall -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=close -Wl,--wrap=prctl -Wl,--wrap=realloc -Wl,--wrap=strndup \
-               -Wl,--wrap=setrlimit -Wl,--wrap=close_range
+               -Wl,--wrap=setrlimit -Wl,--wrap=close_range -Wl,--wrap=write \
+               -Wl,--wrap=unshare -Wl,--wrap=socket -Wl,--wrap=ioctl
 SECCOMP_WRAP := -Wl,--wrap=seccomp_init -Wl,--wrap=seccomp_rule_add_exact \
                 -Wl,--wrap=seccomp_attr_set \
                 -Wl,--wrap=seccomp_load -Wl,--wrap=seccomp_release \

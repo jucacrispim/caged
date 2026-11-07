@@ -21,14 +21,18 @@
 #include "fake_syscalls.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/capability.h>
 #include <linux/landlock.h>
+#include <net/if.h>
 #include <seccomp.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
@@ -36,7 +40,12 @@
 struct fake_context fake;
 
 void reset_fake(void) {
-  fake = (struct fake_context){.abi = 6, .open_ret = 9876};
+  fake = (struct fake_context){
+      .abi = 6,
+      .open_ret = 9876,
+      .socket_fd = 9877,
+      .proc_open_fd = 9878,
+  };
 }
 
 long __wrap_syscall(long num, ...) {
@@ -94,11 +103,104 @@ long __wrap_syscall(long num, ...) {
     ret = fake.restrict_self_ret;
     break;
   }
+  /*
+    capset has no glibc header (the declaration belongs to libcap) and older
+    libcs export a stub that always fails, so caged issues it with syscall().
+    That makes it the one piece of the namespace setup left in this switch;
+    unshare, socket and ioctl have wrappers and are faked as such below.
+  */
+  case SYS_capset: {
+    struct __user_cap_header_struct *header = va_arg(ap, void *);
+    struct __user_cap_data_struct *data = va_arg(ap, void *);
+    fake.capset_calls_count++;
+    fake.last_capset_version = header ? header->version : 0;
+    fake.last_capset_permitted = data ? data[0].permitted : 1;
+    fake.last_capset_effective = data ? data[0].effective : 1;
+    if (fake.capset_ret < 0) {
+      errno = fake.capset_err;
+    }
+    ret = fake.capset_ret;
+    break;
+  }
   default:
     abort();
   }
   va_end(ap);
   return ret;
+}
+
+/*
+  unshare() is never delegated: letting it through would put the test process
+  inside a real user namespace, irreversibly. caged calls it twice (user
+  namespace, then network namespace), and unshare_fail_at picks which of the
+  two fails.
+*/
+int __wrap_unshare(int flags) {
+  fake.unshare_calls_count++;
+  fake.last_unshare_flags = (unsigned long)flags;
+
+  if (fake.unshare_ret >= 0) {
+    return fake.unshare_ret;
+  }
+  if (fake.unshare_fail_at != 0 &&
+      fake.unshare_calls_count != fake.unshare_fail_at) {
+    return 0;
+  }
+  errno = fake.unshare_err;
+  return -1;
+}
+
+/*
+  caged creates one socket, the AF_INET datagram that brings loopback up, so
+  the fake owns the call: a real one would leave a descriptor behind for no
+  reason and tell nothing.
+*/
+int __wrap_socket(int domain, int type, int protocol) {
+  (void)protocol;
+  fake.socket_calls_count++;
+  fake.last_socket_family = domain;
+  fake.last_socket_type = type;
+  if (fake.socket_fd < 0) {
+    errno = fake.socket_err;
+    return -1;
+  }
+  return fake.socket_fd;
+}
+
+extern int __real_ioctl(int fd, unsigned long request, ...);
+
+/*
+  Only the two interface requests are faked. Anything else goes to the real
+  ioctl — stdio asks whether a descriptor is a tty when it first buffers, and
+  that call arrives here too — the same way __wrap_open delegates everything
+  that is not caged's O_PATH probe.
+*/
+int __wrap_ioctl(int fd, unsigned long request, ...) {
+  va_list ap;
+  void *arg;
+
+  va_start(ap, request);
+  arg = va_arg(ap, void *);
+  va_end(ap);
+
+  if (request != SIOCGIFFLAGS && request != SIOCSIFFLAGS) {
+    return __real_ioctl(fd, request, arg);
+  }
+
+  struct ifreq *ifr = arg;
+  fake.ioctl_calls_count++;
+  fake.last_ioctl_request = request;
+  if (fake.ioctl_ret < 0 && (fake.ioctl_fail_at == 0 ||
+                             fake.ioctl_calls_count == fake.ioctl_fail_at)) {
+    errno = fake.ioctl_err;
+    return -1;
+  }
+  if (request == SIOCGIFFLAGS) {
+    ifr->ifr_flags = fake.ioctl_flags;
+  } else {
+    fake.last_ioctl_flags = ifr->ifr_flags;
+  }
+  return 0;
 }
 
 extern int __real_open(const char *path, int flags, ...);
@@ -126,9 +228,30 @@ char *__wrap_strndup(const char *s, size_t n) {
   return __real_strndup(s, n);
 }
 
+/* True when the path belongs to the user namespace configuration. Those files
+   are never touched for real: the test process would either fail or, worse,
+   change its own mappings. */
+static int is_proc_self(const char *path) {
+  return path != NULL && strncmp(path, "/proc/self/", 11) == 0;
+}
+
 int __wrap_open(const char *path, int flags, ...) {
   /* caged uses O_PATH on open. If it is not used, return the real stuff*/
   if (!(flags & O_PATH)) {
+    if (is_proc_self(path)) {
+      fake.proc_open_calls_count++;
+      fake.last_proc_path = path;
+      if (fake.proc_open_calls_count <= 8) {
+        fake.proc_paths[fake.proc_open_calls_count - 1] = path;
+      }
+      if (fake.proc_open_fail &&
+          (fake.proc_open_fail_at == 0 ||
+           fake.proc_open_calls_count == fake.proc_open_fail_at)) {
+        errno = fake.proc_open_err;
+        return -1;
+      }
+      return fake.proc_open_fd;
+    }
     if (flags & O_CREAT) {
       va_list ap;
       va_start(ap, flags);
@@ -171,6 +294,16 @@ int __wrap_close(int fd) {
     fake.ruleset_close_calls_count++;
     return 0;
   }
+  /* Same for the descriptors that stand in for the socket and for the
+     /proc entries of the user namespace: they are not real. */
+  if (fd >= 0 && fd == fake.socket_fd) {
+    fake.socket_close_calls_count++;
+    return 0;
+  }
+  if (fd >= 0 && fd == fake.proc_open_fd) {
+    fake.proc_close_calls_count++;
+    return 0;
+  }
   if (fd != fake.open_ret) {
     return __real_close(fd);
   }
@@ -178,15 +311,76 @@ int __wrap_close(int fd) {
   return 0;
 }
 
+extern ssize_t __real_write(int fd, const void *buf, size_t count);
+
+/* Only the /proc entries written by the namespace setup are faked; anything
+   else (the diagnostics, libgcov) goes to the real one. */
+ssize_t __wrap_write(int fd, const void *buf, size_t count) {
+  if (fd != fake.proc_open_fd) {
+    return __real_write(fd, buf, count);
+  }
+  fake.write_calls_count++;
+  size_t n = count < sizeof fake.last_write - 1 ? count
+                                               : sizeof fake.last_write - 1;
+  memcpy(fake.last_write, buf, n);
+  fake.last_write[n] = '\0';
+  if (fake.write_calls_count <= 8) {
+    memcpy(fake.proc_writes[fake.write_calls_count - 1], fake.last_write,
+           sizeof fake.last_write);
+  }
+  if (fake.write_ret < 0) {
+    errno = fake.write_err;
+    return -1;
+  }
+  if (fake.write_ret > 0) {
+    return fake.write_ret;
+  }
+  return (ssize_t)count;
+}
+
 /* caged only uses prctl(PR_SET_NO_NEW_PRIVS), so we mock just that one */
+/*
+  caged uses three prctl options: PR_SET_NO_NEW_PRIVS (the Landlock step),
+  PR_CAPBSET_DROP (one call per capability, in the drop) and PR_CAP_AMBIENT
+  (clearing the ambient set). Anything else is a bug and aborts.
+*/
 int __wrap_prctl(int option, ...) {
-  if (option != PR_SET_NO_NEW_PRIVS) {
+  va_list ap;
+  int ret = 0;
+
+  va_start(ap, option);
+  switch (option) {
+  case PR_SET_NO_NEW_PRIVS:
+    if (fake.prctl_ret < 0) {
+      errno = fake.prctl_err;
+    }
+    ret = fake.prctl_ret;
+    break;
+  case PR_CAPBSET_DROP: {
+    int cap = va_arg(ap, int);
+    fake.capbset_drop_calls_count++;
+    fake.last_capbset_cap = cap;
+    if (fake.capbset_drop_ret < 0) {
+      errno = fake.capbset_drop_err;
+      ret = -1;
+    }
+    break;
+  }
+  case PR_CAP_AMBIENT: {
+    int sub = va_arg(ap, int);
+    fake.ambient_calls_count++;
+    fake.last_ambient_option = sub;
+    if (fake.ambient_ret < 0) {
+      errno = fake.ambient_err;
+      ret = -1;
+    }
+    break;
+  }
+  default:
     abort();
   }
-  if (fake.prctl_ret < 0) {
-    errno = fake.prctl_err;
-  }
-  return fake.prctl_ret;
+  va_end(ap);
+  return ret;
 }
 
 int __wrap_setrlimit(int resource, const struct rlimit *rlim) {

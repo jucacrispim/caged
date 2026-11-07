@@ -57,6 +57,27 @@ if [ -z "$PYTHON" ] ||
   printf '       tests will fail. Set PYTHON=/path/to/python3 to override.\n' >&2
 fi
 
+# --loopback-only needs unprivileged user namespaces (and a usable /proc to
+# write the id maps). A host that forbids them (kernel.unprivileged_userns_clone
+# = 0, AppArmor on Ubuntu 23.10+) cannot run these tests at all, and neither can
+# a caged running inside another sandbox that denies /proc. Probe once, so one
+# environmental cause does not look like six broken tests.
+LOOPBACK_NS=1
+if ! CAGED_DISABLE_WARNINGS=1 $CAGED $RO --loopback-only -- true >/dev/null 2>&1; then
+  LOOPBACK_NS=0
+  printf 'WARN - user namespaces are unavailable; the --loopback-only tests\n' >&2
+  printf '       will be skipped.\n' >&2
+fi
+
+# skip_no_loopback NAME  (returns 1 when the test must not run)
+skip_no_loopback() {
+  if [ "$LOOPBACK_NS" -eq 0 ]; then
+    ok "$1 (skipped: user namespaces unavailable)"
+    return 1
+  fi
+  return 0
+}
+
 # Creates a socket from inside the cage and prints "created" or the errno of
 # the failure. $1 = extra caged flags, $2 = python expression creating it.
 socket_probe() {
@@ -482,6 +503,123 @@ test_docker_sock_is_unreachable() {
   check "docker.sock is unreachable from the cage" 13 "$out"
 }
 
+# --loopback-only is topology, not a filter: the sandbox builds a network
+# namespace with nothing but loopback in it, so an external address does not
+# get denied, it does not exist. The errno is therefore ENETUNREACH (101), not
+# the EACCES (13) of a seccomp rule -- that contrast is the point of these
+# tests. Client and server both run inside the same cage: from the outside
+# this namespace has no address at all.
+
+# the combination that makes loopback usable: the namespace, the socket
+# family and both TCP directions
+LOOPBACK_OK="--loopback-only --allow-network-sockets --allow-connect-tcp --allow-bind-tcp"
+
+test_loopback_only_connect() {
+  if ! skip_no_loopback "loopback-only: loopback is reachable inside the sandbox"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
+import socket, sys
+try:
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(('127.0.0.1', 0))
+    srv.listen(1)
+    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    c.connect(srv.getsockname())
+except OSError as e:
+    print(e.errno)
+else:
+    print('connected')
+" 2>&1)
+  check "loopback-only: loopback is reachable inside the sandbox" connected "$out"
+}
+
+# the same command without the namespace reaches the host's localhost, so a
+# 101 below can only come from the namespace
+test_loopback_only_blocks_outbound_tcp() {
+  if ! skip_no_loopback "loopback-only: outbound TCP fails with ENETUNREACH"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
+import socket
+try:
+    socket.create_connection(('1.1.1.1', 443), timeout=5)
+except OSError as e:
+    print(e.errno)
+else:
+    print('connected')
+" 2>&1)
+  check "loopback-only: outbound TCP fails with ENETUNREACH" 101 "$out"
+}
+
+# UDP is the case no other layer covers: with --allow-network-sockets it is
+# open for the whole internet, because Landlock only governs TCP. Here the
+# namespace closes it without a rule.
+test_loopback_only_blocks_outbound_udp() {
+  if ! skip_no_loopback "loopback-only: outbound UDP fails with ENETUNREACH"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
+import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.sendto(b'x', ('1.1.1.1', 53))
+except OSError as e:
+    print(e.errno)
+else:
+    print('sent')
+" 2>&1)
+  check "loopback-only: outbound UDP fails with ENETUNREACH" 101 "$out"
+}
+
+# a fresh network namespace starts with lo down; the sandbox brings it up
+test_loopback_only_keeps_lo_up() {
+  if ! skip_no_loopback "loopback-only: lo is up inside the sandbox"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
+import fcntl, socket, struct
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+# struct ifreq is 40 bytes and the kernel copies the whole thing back, so the
+# request has to be that long or the copy runs past the buffer. unpack_from
+# then reads only the 16sH prefix (name + flags); the rest is the union, which
+# SIOCGIFFLAGS does not touch.
+req = struct.pack('16sH', b'lo', 0).ljust(40, b'\x00')
+flags = struct.unpack_from('16sH', fcntl.ioctl(s, 0x8913, req))[1]
+up = bool(flags & 0x1)          # IFF_UP
+loopback = bool(flags & 0x8)    # IFF_LOOPBACK
+print('up' if up and loopback else 'down (0x%x)' % flags)
+" 2>&1)
+  check "loopback-only: lo is up inside the sandbox" up "$out"
+}
+
+# the flag is topology only: it does not release the socket families
+test_loopback_only_keeps_families_denied() {
+  if ! skip_no_loopback "loopback-only does not release AF_INET"; then
+    return
+  fi
+  out=$(socket_probe "--loopback-only" \
+        "socket.socket(socket.AF_INET, socket.SOCK_STREAM)")
+  check "loopback-only does not release AF_INET" 13 "$out"
+}
+
+# the sandbox did not lose the ability to create a namespace: what it lost is
+# the right to make a second one
+test_loopback_only_still_denies_unshare() {
+  if ! skip_no_loopback "loopback-only: the command cannot create a user namespace"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
+import ctypes
+libc = ctypes.CDLL(None, use_errno=True)
+libc.unshare.argtypes = [ctypes.c_int]
+libc.unshare.restype = ctypes.c_int
+r = libc.unshare(0x10000000)
+print(r, ctypes.get_errno())
+" 2>/dev/null)
+  check "loopback-only: the command cannot create a user namespace" "-1 38" "$out"
+}
+
 test_sysv_ipc_denied() {
   $CAGED $RO -- ipcmk -M 1024 >/dev/null 2>&1
   check_ne "sysv IPC denied by default" 0 $?
@@ -815,6 +953,13 @@ main() {
   test_unix_socket_is_denied
   test_family_above_af_max_is_denied
   test_docker_sock_is_unreachable
+
+  test_loopback_only_connect
+  test_loopback_only_blocks_outbound_tcp
+  test_loopback_only_blocks_outbound_udp
+  test_loopback_only_keeps_lo_up
+  test_loopback_only_keeps_families_denied
+  test_loopback_only_still_denies_unshare
 
   test_sysv_ipc_denied
   test_sysv_ipc_allowed_with_flag

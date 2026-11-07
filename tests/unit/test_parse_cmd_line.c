@@ -852,6 +852,45 @@ void test_report_fd_after_separator_is_ignored(void) {
   caged_opts_free(&opts);
 }
 
+/* --loopback-only is a boolean: it builds a network namespace for the command
+   and does not touch the socket families, which is what makes it orthogonal */
+void test_loopback_only(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged", "--loopback-only", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
+  assert(opts.loopback_only == 1);
+  assert(opts.allow_network_sockets == 0);
+  assert(opts.allow_unix_sockets == 0);
+  assert(opts.released_net == 0);
+
+  caged_opts_free(&opts);
+}
+
+/* it mixes with the network and path options, order preserved */
+void test_loopback_only_combined(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged",
+                  "--loopback-only",
+                  "--ro",
+                  "/usr",
+                  "--allow-network-sockets",
+                  "--allow-bind-tcp",
+                  "--",
+                  "true",
+                  NULL};
+
+  /* a previous out-of-memory test leaves realloc failing */
+  reset_fake();
+  assert(parse_cmd_line(8, argv, &opts, NULL) == 0);
+  assert(opts.loopback_only == 1);
+  assert(opts.allow_network_sockets == 1);
+  assert(opts.n_r == 1);
+  assert(strcmp(opts.r_dir[0], "/usr") == 0);
+
+  caged_opts_free(&opts);
+}
+
 /* Silences stderr for a test that expects a diagnostic on it. */
 static int silence_stderr(void) {
   int saved = dup(STDERR_FILENO);
@@ -991,6 +1030,8 @@ int main(void) {
   test_report_fd_above_int_max();
   test_report_fd_last_wins();
   test_report_fd_after_separator_is_ignored();
+  test_loopback_only();
+  test_loopback_only_combined();
   test_report_line_off();
   test_report_fd_reports_usage_error_before_the_flag();
   test_report_fd_prescan_rejects_bad_values();
