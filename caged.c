@@ -35,6 +35,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
@@ -54,6 +55,15 @@
 #define PROC_SELF_SETGROUPS "/proc/self/setgroups"
 #define PROC_SELF_UID_MAP "/proc/self/uid_map"
 #define PROC_SELF_GID_MAP "/proc/self/gid_map"
+
+/*
+  Where --private-tmp mounts the private directory, and with which options.
+  mode=1777 gives it the sticky-bit semantics of a real /tmp; size=1g keeps an
+  unattended write loop from eating the host's memory (tmpfs defaults to half
+  of the RAM, which is far more than a sandbox should ever get).
+*/
+#define PRIVATE_TMP "/tmp"
+#define PRIVATE_TMP_OPTS "mode=1777,size=1g"
 
 /* fs access handled by the latest api */
 #define FS_HANDLED                                                             \
@@ -232,6 +242,8 @@ void caged_opts_free(struct caged_opts *opts) {
   opts->n_connect = 0;
   opts->n_bind = 0;
   opts->n_env = 0;
+  /* private_tmp_src points into the caller's argv: nothing to free. */
+  opts->private_tmp_src = NULL;
   opts->cap_r = 0;
   opts->cap_rw = 0;
   opts->cap_connect = 0;
@@ -837,9 +849,14 @@ static int drop_capabilities(void) {
 }
 
 /*
-  Creates a new user namespace with a loopback network interface only
+  Creates a user namespace that maps the caller's own ids to themselves.
+
+  This is what makes the namespaces of the sandbox possible without
+  privileges: inside the new user namespace the process holds a full
+  capability set, and therefore owns the mount and network namespaces it
+  creates next. Those capabilities are dropped before the command runs.
 */
-static enum caged_return setup_loopback_only(void) {
+static enum caged_return setup_userns(void) {
   unsigned int uid = (unsigned int)geteuid();
   unsigned int gid = (unsigned int)getegid();
 
@@ -859,15 +876,88 @@ static enum caged_return setup_loopback_only(void) {
   if (write_id_map(PROC_SELF_GID_MAP, gid) < 0) {
     return CAGED_ERR_USERNS_MAP;
   }
+  return CAGED_OK;
+}
+
+/*
+  Gives the process a /tmp of its own.
+
+  `src` NULL means a fresh tmpfs; otherwise `src` is bind-mounted over /tmp,
+  which is what a caller that still has to exchange files with the sandbox
+  needs.
+
+  The mount namespace comes first, and "/" is made recursively private before
+  anything is mounted: CLONE_NEWNS copies the mount list but not the
+  propagation, so a mount here would otherwise reach the host's peer groups.
+*/
+static enum caged_return setup_private_tmp(const char *src) {
+  if (unshare(CLONE_NEWNS) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  if (src == NULL) {
+    if (mount("tmpfs", PRIVATE_TMP, "tmpfs", MS_NOSUID | MS_NODEV,
+              PRIVATE_TMP_OPTS) < 0) {
+      return CAGED_ERR_MOUNT;
+    }
+    return CAGED_OK;
+  }
+  if (mount(src, PRIVATE_TMP, NULL, MS_BIND | MS_REC, NULL) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  /*
+    A bind mount inherits the source's flags, so a second mount() is what
+    applies nosuid and nodev to it.
+  */
+  if (mount(NULL, PRIVATE_TMP, NULL,
+            MS_BIND | MS_REMOUNT | MS_NOSUID | MS_NODEV, NULL) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  return CAGED_OK;
+}
+
+/*
+  Creates a network namespace holding nothing but a working loopback.
+*/
+static enum caged_return setup_netns(void) {
   if (unshare(CLONE_NEWNET) < 0) {
     return CAGED_ERR_NETNS;
   }
   if (loopback_up() < 0) {
     return CAGED_ERR_NETNS;
   }
-  /* drop_capabilities must be called before returning the function.
-     A sandbox with capabilities is easily escaped
-  */
+  return CAGED_OK;
+}
+
+/*
+  Builds the namespaces the command will run in.
+
+  The user namespace comes first and is built once, whichever option asked
+  for a namespace: it is what makes the rest possible without privileges. The
+  capabilities it grants are dropped last, after the mounts and the network
+  setup that need them and before Landlock and seccomp: a sandbox whose
+  command starts with capabilities is easily escaped.
+*/
+static enum caged_return setup_namespaces(const struct caged_opts *opts) {
+  enum caged_return r = setup_userns();
+
+  if (r != CAGED_OK) {
+    return r;
+  }
+  if (opts->private_tmp) {
+    r = setup_private_tmp(opts->private_tmp_src);
+    if (r != CAGED_OK) {
+      return r;
+    }
+  }
+  if (opts->loopback_only) {
+    r = setup_netns();
+    if (r != CAGED_OK) {
+      return r;
+    }
+  }
   if (drop_capabilities() < 0) {
     return CAGED_ERR_CAPABILITIES;
   }
@@ -952,6 +1042,8 @@ const char *caged_strreturn(enum caged_return r) {
     return "error setting up the loopback network namespace";
   case CAGED_ERR_CAPABILITIES:
     return "error dropping capabilities";
+  case CAGED_ERR_MOUNT:
+    return "error setting up the private /tmp";
   }
   return "unknown error";
 }
@@ -980,11 +1072,13 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
     return CAGED_ERR_RLIMIT;
   }
   /*
-    The namespace must come before landlock and seccomp. It needs that will
-    be denied by them.
+    The namespaces must come before landlock and seccomp: they need the
+    unshare, the mount and the /proc writes those layers deny, and the
+    filesystem policy has to be built against the /tmp the command will
+    actually see.
   */
-  if (opts->loopback_only) {
-    enum caged_return ns = setup_loopback_only();
+  if (opts->loopback_only || opts->private_tmp) {
+    enum caged_return ns = setup_namespaces(opts);
     if (ns != CAGED_OK) {
       return ns;
     }

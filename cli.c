@@ -110,6 +110,8 @@ void print_help(FILE *out) {
       "  --allow-sysv-ipc               allow System V IPC (shm, msg, sem)\n"
       "  --loopback-only                give the command its own network\n"
       "                                 namespace with only loopback up\n"
+      "  --private-tmp [PATH]           give the command its own /tmp: a fresh\n"
+      "                                 1G tmpfs, or PATH bind-mounted on it\n"
       "  --max-procs N                  set RLIMIT_NPROC to N (default: no "
       "limit)\n"
       "  --require-abi N                fail unless Landlock ABI >= N\n"
@@ -327,6 +329,19 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
     } else if (strcmp(argv[i], "--loopback-only") == 0) {
       opts->loopback_only = 1;
       i += 1;
+    } else if (strcmp(argv[i], "--private-tmp") == 0) {
+      opts->private_tmp = 1;
+      i += 1;
+      /*
+        The bind source is optional: the next argument is only taken when it
+        is not an option or the "--" separator, so "--private-tmp -- cmd"
+        means a fresh tmpfs. A source whose path starts with "-" is not
+        expressible here; use `./-weird-name`.
+      */
+      if (i < argc && argv[i][0] != '-') {
+        opts->private_tmp_src = argv[i];
+        i += 1;
+      }
     } else if (strcmp(argv[i], "--max-procs") == 0) {
       if (i + 1 >= argc) {
         return fatal("--max-procs must have a value");

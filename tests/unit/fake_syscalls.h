@@ -113,9 +113,15 @@ struct fake_context {
   /* user/network namespace setup (--loopback-only) */
   int unshare_ret;
   int unshare_err;
-  /* Fail only the Nth unshare() call (1 = user namespace, 2 = network
-     namespace). 0 fails every call when unshare_ret is negative. */
+  /* Fail only the Nth unshare() call (1 = user namespace, then the mount
+     namespace of --private-tmp, then the network namespace). 0 fails every
+     call when unshare_ret is negative. */
   int unshare_fail_at;
+  /* mount() of --private-tmp: >= 0 succeeds, negative fails with mount_err.
+     Fail only the Nth call when mount_fail_at is set. */
+  int mount_ret;
+  int mount_err;
+  int mount_fail_at;
   int socket_fd;
   int socket_err;
   int ioctl_ret;
@@ -144,6 +150,15 @@ struct fake_context {
   /* namespace spies */
   int unshare_calls_count;
   unsigned long last_unshare_flags;
+  /* every unshare() flag word, in order */
+  unsigned long unshare_flags[8];
+  /* every mount() of --private-tmp, in order */
+  int mount_calls_count;
+  const char *mount_sources[8];
+  const char *mount_targets[8];
+  const char *mount_fstypes[8];
+  const char *mount_data[8];
+  unsigned long mount_flags[8];
   int socket_calls_count;
   int last_socket_family;
   int last_socket_type;

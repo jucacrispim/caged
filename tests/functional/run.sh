@@ -57,21 +57,22 @@ if [ -z "$PYTHON" ] ||
   printf '       tests will fail. Set PYTHON=/path/to/python3 to override.\n' >&2
 fi
 
-# --loopback-only needs unprivileged user namespaces (and a usable /proc to
-# write the id maps). A host that forbids them (kernel.unprivileged_userns_clone
-# = 0, AppArmor on Ubuntu 23.10+) cannot run these tests at all, and neither can
-# a caged running inside another sandbox that denies /proc. Probe once, so one
-# environmental cause does not look like six broken tests.
-LOOPBACK_NS=1
+# The namespace options (--loopback-only, --private-tmp) need unprivileged user
+# namespaces, and a usable /proc to write the id maps. A host that forbids them
+# (kernel.unprivileged_userns_clone = 0, AppArmor on Ubuntu 23.10+) cannot run
+# these tests at all, and neither can a caged running inside another sandbox
+# that denies /proc. Probe once, so one environmental cause does not look like a
+# dozen broken tests.
+USER_NS=1
 if ! CAGED_DISABLE_WARNINGS=1 $CAGED $RO --loopback-only -- true >/dev/null 2>&1; then
-  LOOPBACK_NS=0
-  printf 'WARN - user namespaces are unavailable; the --loopback-only tests\n' >&2
-  printf '       will be skipped.\n' >&2
+  USER_NS=0
+  printf 'WARN - user namespaces are unavailable; the --loopback-only and\n' >&2
+  printf '       --private-tmp tests will be skipped.\n' >&2
 fi
 
-# skip_no_loopback NAME  (returns 1 when the test must not run)
-skip_no_loopback() {
-  if [ "$LOOPBACK_NS" -eq 0 ]; then
+# skip_no_userns NAME  (returns 1 when the test must not run)
+skip_no_userns() {
+  if [ "$USER_NS" -eq 0 ]; then
     ok "$1 (skipped: user namespaces unavailable)"
     return 1
   fi
@@ -515,7 +516,7 @@ test_docker_sock_is_unreachable() {
 LOOPBACK_OK="--loopback-only --allow-network-sockets --allow-connect-tcp --allow-bind-tcp"
 
 test_loopback_only_connect() {
-  if ! skip_no_loopback "loopback-only: loopback is reachable inside the sandbox"; then
+  if ! skip_no_userns "loopback-only: loopback is reachable inside the sandbox"; then
     return
   fi
   out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
@@ -537,7 +538,7 @@ else:
 # the same command without the namespace reaches the host's localhost, so a
 # 101 below can only come from the namespace
 test_loopback_only_blocks_outbound_tcp() {
-  if ! skip_no_loopback "loopback-only: outbound TCP fails with ENETUNREACH"; then
+  if ! skip_no_userns "loopback-only: outbound TCP fails with ENETUNREACH"; then
     return
   fi
   out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
@@ -556,7 +557,7 @@ else:
 # open for the whole internet, because Landlock only governs TCP. Here the
 # namespace closes it without a rule.
 test_loopback_only_blocks_outbound_udp() {
-  if ! skip_no_loopback "loopback-only: outbound UDP fails with ENETUNREACH"; then
+  if ! skip_no_userns "loopback-only: outbound UDP fails with ENETUNREACH"; then
     return
   fi
   out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
@@ -574,7 +575,7 @@ else:
 
 # a fresh network namespace starts with lo down; the sandbox brings it up
 test_loopback_only_keeps_lo_up() {
-  if ! skip_no_loopback "loopback-only: lo is up inside the sandbox"; then
+  if ! skip_no_userns "loopback-only: lo is up inside the sandbox"; then
     return
   fi
   out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
@@ -595,7 +596,7 @@ print('up' if up and loopback else 'down (0x%x)' % flags)
 
 # the flag is topology only: it does not release the socket families
 test_loopback_only_keeps_families_denied() {
-  if ! skip_no_loopback "loopback-only does not release AF_INET"; then
+  if ! skip_no_userns "loopback-only does not release AF_INET"; then
     return
   fi
   out=$(socket_probe "--loopback-only" \
@@ -606,7 +607,7 @@ test_loopback_only_keeps_families_denied() {
 # the sandbox did not lose the ability to create a namespace: what it lost is
 # the right to make a second one
 test_loopback_only_still_denies_unshare() {
-  if ! skip_no_loopback "loopback-only: the command cannot create a user namespace"; then
+  if ! skip_no_userns "loopback-only: the command cannot create a user namespace"; then
     return
   fi
   out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY $LOOPBACK_OK -- "$PYTHON" -c "
@@ -618,6 +619,97 @@ r = libc.unshare(0x10000000)
 print(r, ctypes.get_errno())
 " 2>/dev/null)
   check "loopback-only: the command cannot create a user namespace" "-1 38" "$out"
+}
+
+# --private-tmp is a mount namespace, not a filter: /tmp inside the cage is a
+# fresh tmpfs (or the bind of a directory), so the host's /tmp is invisible from
+# inside and the sandbox's is invisible from outside. --rw /tmp then grants the
+# private directory, not the shared one -- which is the whole point.
+
+# /tmp is writable when it is granted
+test_private_tmp_writes() {
+  if ! skip_no_userns "private-tmp: /tmp is writable when granted"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-tmp --rw /tmp -- \
+        sh -c 'echo hi > /tmp/x && cat /tmp/x' 2>&1)
+  check "private-tmp: /tmp is writable when granted" hi "$out"
+}
+
+# a file the host put in /tmp does not exist inside the sandbox
+test_private_tmp_hides_host_tmp() {
+  if ! skip_no_userns "private-tmp: the host's /tmp is not visible inside"; then
+    return
+  fi
+  host_file="/tmp/caged-private-tmp-host.$$"
+  printf 'host\n' > "$host_file"
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-tmp --rw /tmp -- \
+      cat "$host_file" >/dev/null 2>&1
+  rc=$?
+  rm -f "$host_file"
+  check_ne "private-tmp: the host's /tmp is not visible inside" 0 "$rc"
+}
+
+# and the other direction: what the sandbox writes disappears with it
+test_private_tmp_does_not_leak_to_host() {
+  if ! skip_no_userns "private-tmp: writes stay inside the sandbox"; then
+    return
+  fi
+  leak="/tmp/caged-private-tmp-leak.$$"
+  rm -f "$leak"
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-tmp --rw /tmp -- \
+      sh -c "echo leaked > $leak" >/dev/null 2>&1
+  if [ -e "$leak" ]; then
+    bad "private-tmp: writes stay inside the sandbox ($leak exists on the host)"
+    rm -f "$leak"
+  else
+    ok "private-tmp: writes stay inside the sandbox"
+  fi
+}
+
+# --private-tmp PATH binds PATH over /tmp: it is the same directory seen twice,
+# so a file written inside shows up outside
+test_private_tmp_bind_source() {
+  if ! skip_no_userns "private-tmp: a bind source is shared with the sandbox"; then
+    return
+  fi
+  mkdir -p "$work/shared"
+  printf 'from-host\n' > "$work/shared/in.txt"
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-tmp "$work/shared" \
+        --rw /tmp -- sh -c 'cat /tmp/in.txt && echo x > /tmp/out.txt' 2>&1)
+  check "private-tmp: a bind source is shared with the sandbox" from-host "$out"
+  if [ -f "$work/shared/out.txt" ]; then
+    ok "private-tmp: what the sandbox writes reaches the bind source"
+  else
+    bad "private-tmp: what the sandbox writes reaches the bind source"
+  fi
+}
+
+# the option does not grant anything by itself: without --rw /tmp the private
+# directory is as unreachable as any other path
+test_private_tmp_without_rw_is_denied() {
+  if ! skip_no_userns "private-tmp does not grant /tmp"; then
+    return
+  fi
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-tmp -- \
+      sh -c 'echo x > /tmp/x' >/dev/null 2>&1
+  check_ne "private-tmp does not grant /tmp" 0 $?
+}
+
+# the tmpfs is capped: without a size the kernel would allow half of the RAM
+test_private_tmp_tmpfs_size() {
+  if ! skip_no_userns "private-tmp: the tmpfs is capped at 1 GiB"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO_PY --private-tmp -- \
+        "$PYTHON" -c "
+import os
+st = os.statvfs('/tmp')
+total = st.f_frsize * st.f_blocks
+# 1 GiB, allowing for a kernel that rounds the size down to a page
+print('ok' if 1000 * 1024 * 1024 <= total <= 1024 ** 3 else total)
+" 2>&1)
+  check "private-tmp: the tmpfs is capped at 1 GiB" ok "$out"
 }
 
 test_sysv_ipc_denied() {
@@ -960,6 +1052,13 @@ main() {
   test_loopback_only_keeps_lo_up
   test_loopback_only_keeps_families_denied
   test_loopback_only_still_denies_unshare
+
+  test_private_tmp_writes
+  test_private_tmp_hides_host_tmp
+  test_private_tmp_does_not_leak_to_host
+  test_private_tmp_bind_source
+  test_private_tmp_without_rw_is_denied
+  test_private_tmp_tmpfs_size
 
   test_sysv_ipc_denied
   test_sysv_ipc_allowed_with_flag

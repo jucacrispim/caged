@@ -975,6 +975,7 @@ void test_setup_no_loopback_by_default(void) {
   assert(fake.ioctl_calls_count == 0);
   assert(fake.capbset_drop_calls_count == 0);
   assert(fake.capset_calls_count == 0);
+  assert(fake.mount_calls_count == 0);
   assert(fake.create_calls_count == 1);
 }
 
@@ -1194,6 +1195,211 @@ void test_setup_loopback_capset_error(void) {
   assert(fake.create_calls_count == 0);
 }
 
+/*
+  --private-tmp: the sandbox builds a mount namespace of its own, makes the
+  root private (a mount must not propagate to the host's peer groups) and
+  mounts a fresh tmpfs over /tmp.
+*/
+void test_setup_private_tmp_tmpfs_ok(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  /* user namespace first (it is what grants the mount), then the mount one */
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.unshare_flags[0] == (unsigned long)CLONE_NEWUSER);
+  assert(fake.unshare_flags[1] == (unsigned long)CLONE_NEWNS);
+  /* no network namespace: the flags are orthogonal */
+  assert(fake.ioctl_calls_count == 0);
+  /* "/" becomes recursively private before anything is mounted */
+  assert(fake.mount_calls_count == 2);
+  assert(fake.mount_sources[0] == NULL);
+  assert(strcmp(fake.mount_targets[0], "/") == 0);
+  assert(fake.mount_fstypes[0] == NULL);
+  assert(fake.mount_flags[0] == (unsigned long)(MS_REC | MS_PRIVATE));
+  assert(fake.mount_data[0] == NULL);
+  /* then the tmpfs, with a size ceiling and the sticky-bit mode */
+  assert(strcmp(fake.mount_sources[1], "tmpfs") == 0);
+  assert(strcmp(fake.mount_targets[1], "/tmp") == 0);
+  assert(strcmp(fake.mount_fstypes[1], "tmpfs") == 0);
+  assert(strcmp(fake.mount_data[1], "mode=1777,size=1g") == 0);
+  assert(fake.mount_flags[1] == (unsigned long)(MS_NOSUID | MS_NODEV));
+  /* the capabilities of the user namespace are dropped once, after the mount */
+  assert(fake.capset_calls_count == 1);
+  /* and the policy is still built against the new /tmp */
+  assert(fake.create_calls_count == 1);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* --private-tmp PATH binds the given directory over /tmp instead */
+void test_setup_private_tmp_bind_ok(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+  opts.private_tmp_src = "/tmp/llm-bridge";
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.mount_calls_count == 3);
+  /* the bind itself */
+  assert(strcmp(fake.mount_sources[1], "/tmp/llm-bridge") == 0);
+  assert(strcmp(fake.mount_targets[1], "/tmp") == 0);
+  assert(fake.mount_fstypes[1] == NULL);
+  assert(fake.mount_flags[1] == (unsigned long)(MS_BIND | MS_REC));
+  /* the second mount() is what applies nosuid/nodev to the bind */
+  assert(fake.mount_sources[2] == NULL);
+  assert(strcmp(fake.mount_targets[2], "/tmp") == 0);
+  assert(fake.mount_fstypes[2] == NULL);
+  assert(fake.mount_flags[2] == (unsigned long)(MS_BIND | MS_REMOUNT |
+                                               MS_NOSUID | MS_NODEV));
+  assert(fake.mount_data[2] == NULL);
+  assert(fake.capset_calls_count == 1);
+}
+
+/* both namespace options share one user namespace and drop the capabilities
+   once, at the end */
+void test_setup_private_tmp_and_loopback(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+  opts.private_tmp_src = "/tmp/llm-bridge";
+  opts.loopback_only = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.unshare_calls_count == 3);
+  assert(fake.unshare_flags[0] == (unsigned long)CLONE_NEWUSER);
+  assert(fake.unshare_flags[1] == (unsigned long)CLONE_NEWNS);
+  assert(fake.unshare_flags[2] == (unsigned long)CLONE_NEWNET);
+  assert(fake.mount_calls_count == 3);
+  assert(fake.ioctl_calls_count == 2);
+  assert(fake.capbset_drop_calls_count == CAP_LAST_CAP + 1);
+  assert(fake.capset_calls_count == 1);
+  assert(fake.create_calls_count == 1);
+}
+
+/* the host forbids user namespaces: nothing is mounted */
+void test_setup_private_tmp_userns_error(void) {
+  setup_reaches_seccomp();
+  fake.unshare_ret = -1;
+  fake.unshare_err = EPERM;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_USERNS_UNAVAILABLE);
+  assert(errno == EPERM);
+  assert(fake.mount_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
+/* the mount namespace itself cannot be created */
+void test_setup_private_tmp_mountns_error(void) {
+  setup_reaches_seccomp();
+  fake.unshare_ret = -1;
+  fake.unshare_err = EINVAL;
+  fake.unshare_fail_at = 2;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(errno == EINVAL);
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.mount_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
+/* "/" cannot be made private: a mount now would propagate to the host */
+void test_setup_private_tmp_private_root_error(void) {
+  setup_reaches_seccomp();
+  fake.mount_ret = -1;
+  fake.mount_err = EPERM;
+  fake.mount_fail_at = 1;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(errno == EPERM);
+  assert(fake.mount_calls_count == 1);
+  assert(fake.capset_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
+/* the tmpfs cannot be mounted (a read-only kernel, no memory...) */
+void test_setup_private_tmp_tmpfs_error(void) {
+  setup_reaches_seccomp();
+  fake.mount_ret = -1;
+  fake.mount_err = ENODEV;
+  fake.mount_fail_at = 2;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(errno == ENODEV);
+  assert(fake.mount_calls_count == 2);
+  assert(fake.capset_calls_count == 0);
+}
+
+/* the bind of the source fails */
+void test_setup_private_tmp_bind_error(void) {
+  setup_reaches_seccomp();
+  fake.mount_ret = -1;
+  fake.mount_err = ENOENT;
+  fake.mount_fail_at = 2;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+  opts.private_tmp_src = "/tmp/nope";
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(errno == ENOENT);
+  assert(fake.mount_calls_count == 2);
+  assert(fake.capset_calls_count == 0);
+}
+
+/* the remount that applies nosuid/nodev fails: a bind with the source's
+   flags is not what was asked for */
+void test_setup_private_tmp_remount_error(void) {
+  setup_reaches_seccomp();
+  fake.mount_ret = -1;
+  fake.mount_err = EINVAL;
+  fake.mount_fail_at = 3;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+  opts.private_tmp_src = "/tmp/llm-bridge";
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(fake.mount_calls_count == 3);
+  assert(fake.capset_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
+/* dropping the capabilities fails after the mount: the setup still aborts */
+void test_setup_private_tmp_capset_error(void) {
+  setup_reaches_seccomp();
+  fake.capset_ret = -1;
+  fake.capset_err = EPERM;
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_CAPABILITIES);
+  assert(fake.mount_calls_count == 2);
+  assert(fake.create_calls_count == 0);
+}
+
 /* test if every  return code have a message */
 void test_strreturn(void) {
   enum caged_return codes[] = {
@@ -1225,6 +1431,7 @@ void test_strreturn(void) {
       CAGED_ERR_USERNS_MAP,
       CAGED_ERR_NETNS,
       CAGED_ERR_CAPABILITIES,
+      CAGED_ERR_MOUNT,
   };
   for (size_t i = 0; i < sizeof codes / sizeof codes[0]; i++) {
     const char *msg = caged_strreturn(codes[i]);
@@ -1393,6 +1600,16 @@ int main(void) {
   test_setup_loopback_capbset_unknown_cap();
   test_setup_loopback_ambient_error();
   test_setup_loopback_capset_error();
+  test_setup_private_tmp_tmpfs_ok();
+  test_setup_private_tmp_bind_ok();
+  test_setup_private_tmp_and_loopback();
+  test_setup_private_tmp_userns_error();
+  test_setup_private_tmp_mountns_error();
+  test_setup_private_tmp_private_root_error();
+  test_setup_private_tmp_tmpfs_error();
+  test_setup_private_tmp_bind_error();
+  test_setup_private_tmp_remount_error();
+  test_setup_private_tmp_capset_error();
   test_strreturn();
   test_strreturn_unknown_error();
   test_warn_none_when_all_supported();

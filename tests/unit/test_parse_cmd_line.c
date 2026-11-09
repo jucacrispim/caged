@@ -891,6 +891,78 @@ void test_loopback_only_combined(void) {
   caged_opts_free(&opts);
 }
 
+/* --private-tmp on its own mounts a fresh tmpfs: there is no source to take */
+void test_private_tmp_without_source(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged", "--private-tmp", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts, NULL) == 0);
+  assert(opts.private_tmp == 1);
+  assert(opts.private_tmp_src == NULL);
+
+  caged_opts_free(&opts);
+}
+
+/* --private-tmp PATH takes the next argument as the bind source */
+void test_private_tmp_with_source(void) {
+  struct caged_opts opts = {0};
+  char **cmd = NULL;
+  char *argv[] = {"caged", "--private-tmp", "/tmp/llm-bridge", "--", "true",
+                  NULL};
+
+  assert(parse_cmd_line(5, argv, &opts, &cmd) == 0);
+  assert(opts.private_tmp == 1);
+  assert(strcmp(opts.private_tmp_src, "/tmp/llm-bridge") == 0);
+  assert(strcmp(cmd[0], "true") == 0);
+
+  caged_opts_free(&opts);
+}
+
+/* the source is only taken when it is not an option: "--private-tmp --ro /usr"
+   is a tmpfs plus a read grant, not a bind of "--ro" */
+void test_private_tmp_followed_by_option(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged", "--private-tmp", "--ro", "/usr", "--", "true", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(6, argv, &opts, NULL) == 0);
+  assert(opts.private_tmp == 1);
+  assert(opts.private_tmp_src == NULL);
+  assert(opts.n_r == 1);
+
+  caged_opts_free(&opts);
+}
+
+/* --private-tmp combines with --loopback-only and the path options */
+void test_private_tmp_combined(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged",           "--loopback-only", "--private-tmp",
+                  "--rw",           "/tmp",            "--",
+                  "true",           NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(7, argv, &opts, NULL) == 0);
+  assert(opts.private_tmp == 1);
+  assert(opts.private_tmp_src == NULL);
+  assert(opts.loopback_only == 1);
+  assert(opts.n_rw == 1);
+  assert(strcmp(opts.rw_dir[0], "/tmp") == 0);
+
+  caged_opts_free(&opts);
+}
+
+/* --private-tmp as the last argument has no source and no command */
+void test_private_tmp_missing_command(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged", "--private-tmp", NULL};
+
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
+  assert(opts.private_tmp == 1);
+  assert(opts.private_tmp_src == NULL);
+
+  caged_opts_free(&opts);
+}
+
 /* Silences stderr for a test that expects a diagnostic on it. */
 static int silence_stderr(void) {
   int saved = dup(STDERR_FILENO);
@@ -1032,6 +1104,11 @@ int main(void) {
   test_report_fd_after_separator_is_ignored();
   test_loopback_only();
   test_loopback_only_combined();
+  test_private_tmp_without_source();
+  test_private_tmp_with_source();
+  test_private_tmp_followed_by_option();
+  test_private_tmp_combined();
+  test_private_tmp_missing_command();
   test_report_line_off();
   test_report_fd_reports_usage_error_before_the_flag();
   test_report_fd_prescan_rejects_bad_values();

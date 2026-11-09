@@ -138,6 +138,9 @@ long __wrap_syscall(long num, ...) {
 int __wrap_unshare(int flags) {
   fake.unshare_calls_count++;
   fake.last_unshare_flags = (unsigned long)flags;
+  if (fake.unshare_calls_count <= 8) {
+    fake.unshare_flags[fake.unshare_calls_count - 1] = (unsigned long)flags;
+  }
 
   if (fake.unshare_ret >= 0) {
     return fake.unshare_ret;
@@ -147,6 +150,33 @@ int __wrap_unshare(int flags) {
     return 0;
   }
   errno = fake.unshare_err;
+  return -1;
+}
+
+/*
+  mount() is never delegated either: mounting for real in the test process
+  would change the machine. Every call is recorded -- source, target, type,
+  flags and data -- and mount_fail_at picks which one fails.
+*/
+int __wrap_mount(const char *source, const char *target,
+                 const char *filesystemtype, unsigned long mountflags,
+                 const void *data) {
+  fake.mount_calls_count++;
+  int k = fake.mount_calls_count - 1;
+
+  if (k < 8) {
+    fake.mount_sources[k] = source;
+    fake.mount_targets[k] = target;
+    fake.mount_fstypes[k] = filesystemtype;
+    fake.mount_data[k] = data;
+    fake.mount_flags[k] = mountflags;
+  }
+  if (fake.mount_ret >= 0 || fake.mount_fail_at == 0 ||
+      fake.mount_calls_count != fake.mount_fail_at) {
+    /* a call that is not the one the test picked succeeds */
+    return fake.mount_ret < 0 ? 0 : fake.mount_ret;
+  }
+  errno = fake.mount_err;
   return -1;
 }
 

@@ -84,6 +84,7 @@ enum caged_return {
   CAGED_ERR_USERNS_MAP,
   CAGED_ERR_NETNS,
   CAGED_ERR_CAPABILITIES,
+  CAGED_ERR_MOUNT,
 };
 
 struct caged_opts {
@@ -114,6 +115,23 @@ struct caged_opts {
     without this option still means "the whole network".
   */
   int loopback_only;
+  /*
+    Give the command a /tmp of its own: a fresh tmpfs, or the directory in
+    private_tmp_src bind-mounted over it. Either way the host's /tmp is not
+    reachable from inside and the sandbox's is not reachable from outside.
+
+    It does not grant anything: without --rw /tmp the command still cannot
+    use it. What the option changes is which directory that grant resolves
+    against, which is what makes --rw /tmp safe (on the host it would be the
+    shared, world-writable /tmp).
+  */
+  int private_tmp;
+  /*
+    The directory to bind over /tmp. NULL means "a fresh tmpfs". It points
+    into the caller's argv (the front end does not copy it), so caged_opts_free
+    does not free it.
+  */
+  const char *private_tmp_src;
   long max_procs;
   long require_abi;
   int keep_env;
