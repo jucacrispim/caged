@@ -17,13 +17,16 @@
   along with caged. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#define main caged_program_main
-#include "../../caged.c"
-#include "../../cli.c"
-#undef main
-#include "fake_syscalls.h"
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+
+#include "fake_syscalls.h"
+#include "../../caged_internal.h"
+#include "../../cli_internal.h"
 
 void test_setup_ok(void) {
   reset_fake();
@@ -36,18 +39,18 @@ void test_setup_ok(void) {
   fake.restrict_self_ret = 0;
 
   struct caged_opts opts = {0};
-  push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/usr");
-  push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/etc");
-  push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/tmp/x");
+  caged_push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/usr");
+  caged_push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/etc");
+  caged_push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/tmp/x");
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.create_calls_count == 1);
   assert(fake.add_calls_count == 3);
   assert(fake.restrict_calls_count == 1);
   /* scopes are restricted by default */
-  assert(fake.last_scoped == SCOPED);
+  assert(fake.last_scoped == CAGED_SCOPED);
   /* net is handled (and thus denied) by default */
-  assert(fake.last_handled_net == NET_HANDLED);
+  assert(fake.last_handled_net == CAGED_NET_HANDLED);
   /* no restrict-self flags are passed by default */
   assert(fake.last_restrict_flags == 0);
 
@@ -66,7 +69,7 @@ void test_setup_released_net_general(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.last_handled_net ==
-         ((unsigned long)NET_HANDLED & ~LANDLOCK_ACCESS_NET_CONNECT_TCP));
+         ((unsigned long)CAGED_NET_HANDLED & ~LANDLOCK_ACCESS_NET_CONNECT_TCP));
 }
 
 /* --allow-*-port adds a rule per port */
@@ -78,13 +81,13 @@ void test_setup_net_port_rules(void) {
   fake.restrict_self_ret = 0;
 
   struct caged_opts opts = {0};
-  push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
-  push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
+  caged_push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
+  caged_push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.add_calls_count == 2);
   /* net stays governed when only individual ports are granted */
-  assert(fake.last_handled_net == NET_HANDLED);
+  assert(fake.last_handled_net == CAGED_NET_HANDLED);
   /* last rule is the bind one */
   assert(fake.last_net_allowed_access == LANDLOCK_ACCESS_NET_BIND_TCP);
   assert(fake.last_net_port == 80);
@@ -100,7 +103,7 @@ void test_setup_connect_rule_error(void) {
   fake.add_rule_err = EINVAL;
 
   struct caged_opts opts = {0};
-  push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
+  caged_push_port(&opts.connect_ports, &opts.n_connect, &opts.cap_connect, 443);
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_CONNECT_ACCESS);
   assert(fake.restrict_calls_count == 0);
@@ -116,7 +119,7 @@ void test_setup_bind_rule_error(void) {
   fake.add_rule_err = EINVAL;
 
   struct caged_opts opts = {0};
-  push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
+  caged_push_port(&opts.bind_ports, &opts.n_bind, &opts.cap_bind, 80);
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_BIND_ACCESS);
   assert(fake.restrict_calls_count == 0);
@@ -148,7 +151,7 @@ void test_setup_released_scope(void) {
   opts.released_scopes = LANDLOCK_SCOPE_SIGNAL;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
-  assert(fake.last_scoped == (SCOPED & ~LANDLOCK_SCOPE_SIGNAL));
+  assert(fake.last_scoped == (CAGED_SCOPED & ~LANDLOCK_SCOPE_SIGNAL));
 }
 
 /* below ABI 6 scopes are unsupported, so nothing is restricted */
@@ -189,7 +192,7 @@ void test_setup_restrict_flags_unsupported_abi(void) {
   fake.restrict_self_ret = 0;
 
   struct caged_opts opts = {0};
-  opts.restrict_flags = RESTRICT_FLAGS;
+  opts.restrict_flags = CAGED_RESTRICT_FLAGS;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.last_restrict_flags == 0);
@@ -203,11 +206,11 @@ void test_setup_restrict_flags_abi_7(void) {
   fake.restrict_self_ret = 0;
 
   struct caged_opts opts = {0};
-  opts.restrict_flags = RESTRICT_FLAGS;
+  opts.restrict_flags = CAGED_RESTRICT_FLAGS;
 
   assert(caged_setup(&opts, NULL) == CAGED_OK);
   assert(fake.last_restrict_flags ==
-         (RESTRICT_FLAGS & ~LANDLOCK_RESTRICT_SELF_TSYNC));
+         (CAGED_RESTRICT_FLAGS & ~LANDLOCK_RESTRICT_SELF_TSYNC));
 }
 
 void test_setup_no_landlock(void) {
@@ -313,7 +316,7 @@ void test_setup_allow_ro_error(void) {
   fake.open_err = ENOENT;
 
   struct caged_opts opts = {0};
-  push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/nope");
+  caged_push_path(&opts.r_dir, &opts.n_r, &opts.cap_r, "/nope");
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_READ_ACCESS);
   assert(fake.restrict_calls_count == 0);
@@ -329,7 +332,7 @@ void test_setup_allow_rw_error(void) {
   fake.open_err = ENOENT;
 
   struct caged_opts opts = {0};
-  push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/nope");
+  caged_push_path(&opts.rw_dir, &opts.n_rw, &opts.cap_rw, "/nope");
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_RW_ACCESS);
   assert(fake.restrict_calls_count == 0);
@@ -363,7 +366,7 @@ void test_setup_restrict_syscall_error(void) {
 }
 
 /*
-  Number of seccomp rules added by deny_socket_families(): every family
+  Number of seccomp rules added by caged_deny_socket_families(): every family
   except the four allowed ones, plus the "above AF_MAX" catch-all.
 */
 static int family_rules(void) {
@@ -378,14 +381,14 @@ static int family_rules(void) {
   return n + 1;
 }
 
-/* Number of rules added by deny_sysv_ipc(): one per SysV IPC syscall. */
-static int sysv_rules(void) { return (int)SYSV_IPC_N; }
+/* Number of rules added by caged_deny_sysv_ipc(): one per SysV IPC syscall. */
+static int sysv_rules(void) { return (int)caged_sysv_ipc_syscalls_n; }
 
-/* Number of rules added by deny_dangerous_syscalls(). */
-static int deny_rules(void) { return (int)DENY_SYSCALLS_N; }
+/* Number of rules added by caged_deny_dangerous_syscalls(). */
+static int deny_rules(void) { return (int)caged_deny_syscalls_n; }
 
-/* Number of rules added by deny_clone_namespaces(): one per namespace flag. */
-static int clone_ns_rules(void) { return (int)CLONE_NS_N; }
+/* Number of rules added by caged_deny_clone_namespaces(): one per namespace flag. */
+static int clone_ns_rules(void) { return (int)caged_clone_ns_flags_n; }
 
 /* Common setup for a landlock run that reaches the seccomp step. */
 static void setup_reaches_seccomp(void) {
@@ -479,7 +482,7 @@ void test_setup_close_fds_error(void) {
 void test_close_inherited_fds_no_report(void) {
   reset_fake();
 
-  assert(close_inherited_fds(0) == 0);
+  assert(caged_close_inherited_fds(0) == 0);
   assert(fake.close_range_calls_count == 1);
   assert(fake.last_close_range_first == 3);
   assert(fake.last_close_range_last == ~0U);
@@ -490,7 +493,7 @@ void test_close_inherited_fds_no_report(void) {
 void test_close_inherited_fds_report_fd_three(void) {
   reset_fake();
 
-  assert(close_inherited_fds(3) == 0);
+  assert(caged_close_inherited_fds(3) == 0);
   assert(fake.close_range_calls_count == 1);
   assert(fake.last_close_range_first == 4);
   assert(fake.last_close_range_last == ~0U);
@@ -500,7 +503,7 @@ void test_close_inherited_fds_report_fd_three(void) {
 void test_close_inherited_fds_report_fd_higher(void) {
   reset_fake();
 
-  assert(close_inherited_fds(7) == 0);
+  assert(caged_close_inherited_fds(7) == 0);
   assert(fake.close_range_calls_count == 2);
   assert(fake.last_close_range_first == 8);
   assert(fake.last_close_range_last == ~0U);
@@ -512,7 +515,7 @@ void test_close_inherited_fds_report_fd_error(void) {
   fake.close_range_ret = -1;
   fake.close_range_err = EINVAL;
 
-  assert(close_inherited_fds(7) < 0);
+  assert(caged_close_inherited_fds(7) < 0);
   assert(fake.close_range_calls_count == 1);
 }
 
@@ -674,7 +677,7 @@ void test_setup_seccomp_syscalls_error(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSCALLS);
   assert(seccomp_detail == -EINVAL);
-  assert(strcmp(seccomp_failed_syscall, DENY_SYSCALLS[0]) == 0);
+  assert(strcmp(seccomp_failed_syscall, caged_deny_syscalls[0]) == 0);
   assert(fake.seccomp_load_calls_count == 0);
   assert(fake.seccomp_release_calls_count == 1);
 }
@@ -688,7 +691,7 @@ void test_setup_seccomp_syscalls_last_error(void) {
   struct caged_opts opts = {0};
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSCALLS);
-  assert(strcmp(seccomp_failed_syscall, DENY_SYSCALLS[deny_rules() - 1]) == 0);
+  assert(strcmp(seccomp_failed_syscall, caged_deny_syscalls[deny_rules() - 1]) == 0);
   assert(fake.seccomp_resolve_calls_count == sysv_rules() + deny_rules());
   assert(fake.seccomp_load_calls_count == 0);
 }
@@ -702,7 +705,7 @@ void test_setup_seccomp_syscalls_resolve_error(void) {
 
   assert(caged_setup(&opts, NULL) == CAGED_ERR_SECCOMP_SYSCALLS);
   assert(seccomp_detail == -ENOSYS);
-  assert(strcmp(seccomp_failed_syscall, DENY_SYSCALLS[1]) == 0);
+  assert(strcmp(seccomp_failed_syscall, caged_deny_syscalls[1]) == 0);
   assert(fake.seccomp_rule_calls_count ==
          family_rules() + 7 + clone_ns_rules() + sysv_rules() + 1);
   assert(fake.seccomp_load_calls_count == 0);

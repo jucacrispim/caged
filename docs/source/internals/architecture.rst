@@ -1,7 +1,8 @@
 Architecture
 ============
 
-caged is split in five files, along a library / command-line boundary:
+caged is split in eight files: six for the sandbox and two for the command-line
+front end.
 
 ``caged.h``
     The public interface. It holds ``enum caged_return``, ``struct caged_opts``,
@@ -11,27 +12,48 @@ caged is split in five files, along a library / command-line boundary:
     pieces a program embedding caged needs, and the ``LANDLOCK_*`` fallback
     macros the headers of an older system lack.
 
+``caged_internal.h``
+    What the sandbox files share between themselves: the Landlock masks, the
+    tables of the seccomp layer and the declaration of every helper. It is not
+    part of the library contract, and it carries the system headers those
+    declarations depend on.
+
 ``caged.c``
-    The sandbox logic, and only that: the ABI gating, the Landlock ruleset and
-    rules, the seccomp filter and the resource limits. It parses no arguments
-    and prints nothing for the user, so it can be linked as a library.
-    Everything that is not part of the public API stays ``static`` here.
+    The setup: the order of the steps, the resource limits, the inherited
+    descriptors and the return codes. It parses no arguments and prints
+    nothing for the user, so it can be linked as a library.
+
+``landlock.c``
+    The ABI probe, the ruleset, the rules, and the getters that drop the bits a
+    given ABI does not know.
+
+``seccomp.c``
+    The filter: the socket-family floor, the raw and netlink rules, the SysV
+    IPC table, the clone flags and the denylist of dangerous syscalls.
+
+``namespaces.c``
+    The user namespace and its id maps, the mount namespace with the private
+    directories, and the network namespace with loopback.
+
+``env.c``
+    What the command inherits by default, the ``--env`` overrides and the
+    replacement of ``environ``.
 
 ``cli.h`` / ``cli.c``
     The command-line front end proper: ``parse_cmd_line``, ``print_help`` and
     the ABI warnings, plus the ``push_*`` list helpers the parser uses. None
-    of it is part of the sandbox.
+    of it is part of the sandbox. ``cli_internal.h`` declares the helpers the
+    unit tests drive directly.
 
 ``main.c``
     The executable: ``die`` and ``main``. It parses ``argv``, calls
     ``caged_setup``, prints the ABI warnings and ``execvpe``\\s the command.
     It holds no policy of its own, so another front end can replace it.
 
-The unit tests still include ``caged.c`` (and, where needed, ``cli.c``)
-directly to reach the ``static`` helpers (see :doc:`testing`). This page
-describes how the pieces are structured and how the setup flow works. The
-semantics of the individual rights are in :doc:`rules`, and the ABI gating in
-:doc:`abi`.
+The unit tests link the objects and include ``caged_internal.h`` and
+``cli_internal.h`` (see :doc:`testing`). This page describes how the pieces are
+structured and how the setup flow works. The semantics of the individual rights
+are in :doc:`rules`, and the ABI gating in :doc:`abi`.
 
 There are two enforcement layers. **Landlock** governs everything that has a
 name: paths, TCP ports and IPC scopes. **seccomp** governs what Landlock cannot
@@ -484,7 +506,7 @@ one per concern:
 ``seccomp_syscall_resolve_name`` and adds a zero-argument
 ``SCMP_ACT_ERRNO(ENOSYS)`` rule. A name the library cannot resolve fails
 **closed** (``seccomp_detail = -ENOSYS``) instead of installing a filter with a
-hole in it. Driving by table keeps each list at one branch in ``caged.c``
+hole in it. Driving by table keeps each list at one branch in ``seccomp.c``
 instead of one per name. ``deny_clone_namespaces`` adds its rules directly,
 since its table holds flags and not syscall names.
 
@@ -517,7 +539,7 @@ Going further
 -------------
 
 Embedding caged in another program is documented in :doc:`../library`: ``make
-lib`` builds ``build/libcaged.a`` from ``caged.c`` alone.
+lib`` builds ``build/libcaged.a`` from the five sandbox objects.
 
 Two cleanups remain. ``apply_seccomp`` builds and installs the filter in one
 go; separating a side-effect-free ``build_seccomp_ctx`` from an

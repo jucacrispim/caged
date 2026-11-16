@@ -135,9 +135,22 @@ Internal
 - ``setup_namespaces`` no longer takes ``struct caged_opts``: it takes the four
   fields it reads (``private_tmp``, ``private_tmp_src``, ``private_shm``,
   ``loopback_only``), the way ``apply_seccomp`` takes the three flags it uses.
-  The function is static, so no embedder sees this; what it buys is that the
-  call graph says which options a step depends on instead of handing every step
-  the whole struct.
+  What it buys is that the call graph says which options a step depends on
+  instead of handing every step the whole struct.
+
+- ``caged.c`` was split by subsystem: ``landlock.c`` (the ABI probe, the ruleset
+  and the rules), ``seccomp.c`` (the filter and its tables), ``namespaces.c``
+  (the user, mount and network namespaces) and ``env.c`` (the command
+  environment). ``caged.c`` keeps the setup and the steps that belong to no
+  subsystem: the resource limits, the inherited descriptors and the return
+  codes. The shared declarations and the Landlock masks are in
+  ``caged_internal.h``.
+
+- The helpers the unit tests drive are no longer ``static``: they have external
+  linkage and a ``caged_`` prefix, declared in ``caged_internal.h`` and
+  ``cli_internal.h``. The tests link the objects instead of including the
+  sources. ``libcaged.a`` now exports them, which is a naming choice and not a
+  hidden interface (see ``library.rst``). No public symbol changed.
 
 v0.7.0
 ------

@@ -32,6 +32,7 @@
 #include <unistd.h>
 
 #include "cli.h"
+#include "cli_internal.h"
 
 /* These feature stuff are used by the warning messages about
    landlock features not supported by the hosts ABI
@@ -160,7 +161,7 @@ void warn_unsupported_features(long abi) {
   Appends `path` to a dynamic list, growing the backing array (doubling its
   capacity) when it is full. Returns 0 on success, -1 on allocation failure.
 */
-static int push_path(const char ***list, int *n, int *cap, const char *path) {
+int caged_push_path(const char ***list, int *n, int *cap, const char *path) {
   if (*n == *cap) {
     int new_cap = *cap ? *cap * 2 : 4;
     const char **grown =
@@ -179,7 +180,7 @@ static int push_path(const char ***list, int *n, int *cap, const char *path) {
   Parses a decimal port number into `out`. Returns 0 on success, -1 when the
   string is not a valid port in the 0..65535 range.
 */
-static int parse_port(const char *s, unsigned short *out) {
+int caged_parse_port(const char *s, unsigned short *out) {
   char *end;
   errno = 0;
   unsigned long v = strtoul(s, &end, 10);
@@ -194,7 +195,7 @@ static int parse_port(const char *s, unsigned short *out) {
   Parses a positive decimal into `out`. Returns 0 on success, -1 when the
   string is not a positive integer.
 */
-static int parse_positive(const char *s, long *out) {
+int caged_parse_positive(const char *s, long *out) {
   char *end;
   errno = 0;
   long v = strtol(s, &end, 10);
@@ -222,7 +223,7 @@ static int prescan_report_fd(int argc, char *argv[]) {
     if (strcmp(argv[i], "--report-fd") != 0) {
       continue;
     }
-    if (parse_positive(argv[i + 1], &v) < 0) {
+    if (caged_parse_positive(argv[i + 1], &v) < 0) {
       continue;
     }
     if (v < 3 || v > INT_MAX) {
@@ -237,7 +238,7 @@ static int prescan_report_fd(int argc, char *argv[]) {
   Appends `port` to a dynamic list, growing the backing array (doubling its
   capacity) when it is full. Returns 0 on success, -1 on allocation failure.
 */
-static int push_port(unsigned short **list, int *n, int *cap,
+int caged_push_port(unsigned short **list, int *n, int *cap,
                      unsigned short port) {
   if (*n == *cap) {
     int new_cap = *cap ? *cap * 2 : 4;
@@ -257,7 +258,7 @@ static int push_port(unsigned short **list, int *n, int *cap,
   backing array (doubling its capacity) when it is full. Returns 0 on
   success, -1 on allocation failure.
 */
-static int push_env(char ***list, int *n, int *cap, const char *entry) {
+int caged_push_env(char ***list, int *n, int *cap, const char *entry) {
   if (*n == *cap) {
     int new_cap = *cap ? *cap * 2 : 4;
     char **grown = realloc(*list, (size_t)new_cap * sizeof **list);
@@ -288,7 +289,8 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (i + 1 >= argc) {
         return fatal("--ro must have a value");
       }
-      if (push_path(&opts->r_dir, &opts->n_r, &opts->cap_r, argv[i + 1]) < 0) {
+      if (caged_push_path(&opts->r_dir, &opts->n_r, &opts->cap_r, argv[i + 1]) <
+          0) {
         return fatal("out of memory");
       }
       i += 2;
@@ -296,8 +298,8 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (i + 1 >= argc) {
         return fatal("--rw must have a value");
       }
-      if (push_path(&opts->rw_dir, &opts->n_rw, &opts->cap_rw, argv[i + 1]) <
-          0) {
+      if (caged_push_path(&opts->rw_dir, &opts->n_rw, &opts->cap_rw,
+                          argv[i + 1]) < 0) {
         return fatal("out of memory");
       }
       i += 2;
@@ -351,7 +353,7 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (i + 1 >= argc) {
         return fatal("--max-procs must have a value");
       }
-      if (parse_positive(argv[i + 1], &opts->max_procs) < 0) {
+      if (caged_parse_positive(argv[i + 1], &opts->max_procs) < 0) {
         return fatal("--max-procs must be a positive number");
       }
       i += 2;
@@ -359,7 +361,7 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (i + 1 >= argc) {
         return fatal("--require-abi must have a value");
       }
-      if (parse_positive(argv[i + 1], &opts->require_abi) < 0) {
+      if (caged_parse_positive(argv[i + 1], &opts->require_abi) < 0) {
         return fatal("--require-abi must be a positive number");
       }
       i += 2;
@@ -368,7 +370,8 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (i + 1 >= argc) {
         return fatal("--report-fd must have a value");
       }
-      if (parse_positive(argv[i + 1], &fd) < 0 || fd < 3 || fd > INT_MAX) {
+      if (caged_parse_positive(argv[i + 1], &fd) < 0 || fd < 3 ||
+          fd > INT_MAX) {
         return fatal("--report-fd must be a descriptor number (>= 3)");
       }
       opts->report_fd = (int)fd;
@@ -384,7 +387,8 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (strchr(argv[i + 1], '=') == NULL || argv[i + 1][0] == '=') {
         return fatal("--env must have the form NAME=VALUE");
       }
-      if (push_env(&opts->env, &opts->n_env, &opts->cap_env, argv[i + 1]) < 0) {
+      if (caged_push_env(&opts->env, &opts->n_env, &opts->cap_env,
+                         argv[i + 1]) < 0) {
         return fatal("out of memory");
       }
       i += 2;
@@ -408,11 +412,11 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (opts->released_net & LANDLOCK_ACCESS_NET_CONNECT_TCP) {
         return fatal("--allow-connect-port conflicts with --allow-connect-tcp");
       }
-      if (parse_port(argv[i + 1], &port) < 0) {
+      if (caged_parse_port(argv[i + 1], &port) < 0) {
         return fatal("--allow-connect-port must be a port number (0..65535)");
       }
-      if (push_port(&opts->connect_ports, &opts->n_connect, &opts->cap_connect,
-                    port) < 0) {
+      if (caged_push_port(&opts->connect_ports, &opts->n_connect,
+                          &opts->cap_connect, port) < 0) {
         return fatal("out of memory");
       }
       i += 2;
@@ -424,11 +428,11 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
       if (opts->released_net & LANDLOCK_ACCESS_NET_BIND_TCP) {
         return fatal("--allow-bind-port conflicts with --allow-bind-tcp");
       }
-      if (parse_port(argv[i + 1], &port) < 0) {
+      if (caged_parse_port(argv[i + 1], &port) < 0) {
         return fatal("--allow-bind-port must be a port number (0..65535)");
       }
-      if (push_port(&opts->bind_ports, &opts->n_bind, &opts->cap_bind, port) <
-          0) {
+      if (caged_push_port(&opts->bind_ports, &opts->n_bind, &opts->cap_bind,
+                          port) < 0) {
         return fatal("out of memory");
       }
       i += 2;

@@ -21,9 +21,7 @@
  from seccomp_export_pfc
 */
 
-#define main caged_program_main
-#include "../../caged.c"
-#undef main
+#define _GNU_SOURCE
 
 #include <assert.h>
 #include <stdio.h>
@@ -31,6 +29,8 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+
+#include "../../caged_internal.h"
 
 /* Renders the filter as pseudo code and leaves it in buf. */
 static void export_pfc(scmp_filter_ctx ctx, char *buf, size_t size) {
@@ -52,25 +52,25 @@ static void export_pfc(scmp_filter_ctx ctx, char *buf, size_t size) {
   close(fd);
 }
 
-/* Builds the filter exactly as apply_seccomp does, with the given steps
+/* Builds the filter exactly as caged_apply_seccomp does, with the given steps
    enabled, and returns the rendered pseudo code. */
 static void build_and_export(int with_unix, int with_network, char *buf,
                              size_t size) {
   scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
 
   assert(ctx != NULL);
-  assert(deny_socket_families(ctx) == 0);
-  assert(deny_inet_raw(ctx) == 0);
-  assert(deny_netlink_usersock(ctx) == 0);
+  assert(caged_deny_socket_families(ctx) == 0);
+  assert(caged_deny_inet_raw(ctx) == 0);
+  assert(caged_deny_netlink_usersock(ctx) == 0);
   if (with_unix) {
-    assert(deny_unix_sockets(ctx) == 0);
+    assert(caged_deny_unix_sockets(ctx) == 0);
   }
   if (with_network) {
-    assert(deny_network_sockets(ctx) == 0);
+    assert(caged_deny_network_sockets(ctx) == 0);
   }
-  assert(deny_clone_namespaces(ctx) == 0);
-  assert(deny_sysv_ipc(ctx) == 0);
-  assert(deny_dangerous_syscalls(ctx) == 0);
+  assert(caged_deny_clone_namespaces(ctx) == 0);
+  assert(caged_deny_sysv_ipc(ctx) == 0);
+  assert(caged_deny_dangerous_syscalls(ctx) == 0);
   export_pfc(ctx, buf, size);
   seccomp_release(ctx);
 }
@@ -209,8 +209,8 @@ void test_clone_namespaces_denied(void) {
 
   p = strstr(buf, "# filter for syscall \"clone\" (");
   assert(p != NULL);
-  for (size_t k = 0; k < CLONE_NS_N; k++) {
-    unsigned long long flag = CLONE_NS_FLAGS[k];
+  for (size_t k = 0; k < caged_clone_ns_flags_n; k++) {
+    unsigned long long flag = caged_clone_ns_flags[k];
     snprintf(needle, sizeof needle, "$a0.lo32 & 0x%08llx == %llu)", flag, flag);
     assert(strstr(p, needle) != NULL);
   }

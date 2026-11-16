@@ -17,11 +17,13 @@
   along with caged. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#define main caged_program_main
-#include "../../caged.c"
-#undef main
-#include "fake_syscalls.h"
+#define _GNU_SOURCE
+
 #include <assert.h>
+#include <errno.h>
+
+#include "fake_syscalls.h"
+#include "../../caged_internal.h"
 
 /* Number of entries in a NULL-terminated env array. */
 static int env_len(char **env) {
@@ -40,7 +42,7 @@ static int env_count(char **env, const char *name) {
   size_t len = strlen(name);
 
   for (int k = 0; env[k] != NULL; k++) {
-    if (env_name_len(env[k]) == len && strncmp(env[k], name, len) == 0) {
+    if (caged_env_name_len(env[k]) == len && strncmp(env[k], name, len) == 0) {
       n++;
     }
   }
@@ -52,7 +54,7 @@ static const char *env_value(char **env, const char *name) {
   size_t len = strlen(name);
 
   for (int k = 0; env[k] != NULL; k++) {
-    if (env_name_len(env[k]) == len && strncmp(env[k], name, len) == 0) {
+    if (caged_env_name_len(env[k]) == len && strncmp(env[k], name, len) == 0) {
       return env[k] + len + 1;
     }
   }
@@ -79,7 +81,7 @@ static char **run_setup(const struct caged_opts *opts) {
 
 /* Pushes a NAME=VALUE into opts.env, as the parser would. */
 static void add_env(struct caged_opts *opts, const char *entry) {
-  assert(push_env_entry(&opts->env, &opts->n_env, &opts->cap_env, entry) == 0);
+  assert(caged_push_env_entry(&opts->env, &opts->n_env, &opts->cap_env, entry) == 0);
 }
 
 /* The default is a closed base: PATH/HOME/LANG/LC_* survive, anything else
@@ -380,22 +382,22 @@ void test_setup_env_without_equals(void) {
 
 /* the name of an entry ends at '=' and the whole string when there is none */
 void test_env_name_len(void) {
-  assert(env_name_len("FOO=bar") == 3);
-  assert(env_name_len("PATH=") == 4);
-  assert(env_name_len("NOEQ") == 4);
+  assert(caged_env_name_len("FOO=bar") == 3);
+  assert(caged_env_name_len("PATH=") == 4);
+  assert(caged_env_name_len("NOEQ") == 4);
 }
 
 /* the base table is the documented set: no wildcard, so a new LC_* name is
    not inherited until it is added here */
 void test_base_env_table(void) {
-  assert(env_is_base("PATH=/usr/bin"));
-  assert(env_is_base("HOME=/home/juca"));
-  assert(env_is_base("LANG=pt_BR.UTF-8"));
-  assert(env_is_base("LANGUAGE=pt_BR:en"));
-  assert(env_is_base("LC_ALL=C"));
-  assert(env_is_base("LC_IDENTIFICATION=C"));
-  assert(!env_is_base("LC_UNKNOWN_CATEGORY=C"));
-  assert(!env_is_base("FOO=bar"));
+  assert(caged_env_is_base("PATH=/usr/bin"));
+  assert(caged_env_is_base("HOME=/home/juca"));
+  assert(caged_env_is_base("LANG=pt_BR.UTF-8"));
+  assert(caged_env_is_base("LANGUAGE=pt_BR:en"));
+  assert(caged_env_is_base("LC_ALL=C"));
+  assert(caged_env_is_base("LC_IDENTIFICATION=C"));
+  assert(!caged_env_is_base("LC_UNKNOWN_CATEGORY=C"));
+  assert(!caged_env_is_base("FOO=bar"));
 }
 
 int main(void) {

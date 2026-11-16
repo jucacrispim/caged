@@ -39,18 +39,29 @@ VG_NOFILE   ?= 1024
 DOCS_DIR    := docs
 DOCS_VENV   := $(HOME)/.virtualenvs/caged-docs
 
+# The sandbox is split by subsystem: the setup (caged.c) drives the Landlock
+# layer, the seccomp layer, the namespaces and the environment.
+LIB_SRCS    := caged.c landlock.c seccomp.c namespaces.c env.c
+CLI_SRCS    := cli.c
+HEADERS     := caged.h caged_internal.h cli.h cli_internal.h
+
 UNIT_TESTS  := test_abi test_allow_access test_parse_cmd_line test_setup test_net test_help test_seccomp_pfc test_env
 UNIT_BINS   := $(addprefix $(BUILD_DIR)/,$(UNIT_TESTS))
 COV_BINS    := $(addprefix $(COV_DIR)/,$(UNIT_TESTS))
 SAN_BINS    := $(addprefix $(SAN_DIR)/,$(UNIT_TESTS))
 
-# The library (caged.c) and the command-line front end (cli.c) are measured
-# separately: most test binaries include one, the parsing/help/env ones
-# include both.
-COV_SOURCES := --filter 'caged\.c$$' --filter 'cli\.c$$'
+BUILD_OBJS  := $(addprefix $(BUILD_DIR)/,$(LIB_SRCS:.c=.o) $(CLI_SRCS:.c=.o))
+COV_OBJS    := $(addprefix $(COV_DIR)/,$(LIB_SRCS:.c=.o) $(CLI_SRCS:.c=.o))
+SAN_OBJS    := $(addprefix $(SAN_DIR)/,$(LIB_SRCS:.c=.o) $(CLI_SRCS:.c=.o))
 
-# The library form: caged.o is the sandbox and only that (no parser, no main),
-# so a consumer that wants to embed the sandbox links libcaged.a and includes
+# Every file that holds sandbox logic is measured. main.c is not: it ends in
+# execve and only has the die paths, which the functional tests cover.
+COV_SOURCES := --filter 'caged\.c$$' --filter 'landlock\.c$$' \
+               --filter 'seccomp\.c$$' --filter 'namespaces\.c$$' \
+               --filter 'env\.c$$' --filter 'cli\.c$$'
+
+# The library form: libcaged.a is the sandbox and only that (no parser, no
+# main), so a consumer that wants to embed the sandbox links it and includes
 # caged.h. The command-line front end is not part of it; a consumer that also
 # wants parse_cmd_line / warn_unsupported_features compiles cli.c as well.
 LIB         := $(BUILD_DIR)/libcaged.a
@@ -61,7 +72,7 @@ LIB         := $(BUILD_DIR)/libcaged.a
 # cannot be forgotten. Only syntax is checked — nothing is compiled.
 LINT_CFLAGS := -fsyntax-only -Wconversion -Wsign-conversion \
                -Werror=conversion -Werror=sign-conversion
-LINT_SOURCES := caged.c cli.c main.c
+LINT_SOURCES := $(LIB_SRCS) $(CLI_SRCS) main.c
 
 .PHONY: all build lib lint unit test functional check coverage valgrind sanitize clean docs docs-env seccomp-dep
 
@@ -71,15 +82,18 @@ build: seccomp-dep $(BUILD_DIR)/caged
 
 lib: seccomp-dep $(LIB)
 
-$(BUILD_DIR)/caged.o: caged.c caged.h
+$(BUILD_DIR)/%.o: %.c $(HEADERS)
 	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c -o $@ caged.c
+	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(LIB): $(BUILD_DIR)/caged.o
-	$(AR) rcs $@ $<
+$(BUILD_DIR)/caged: $(BUILD_OBJS) $(BUILD_DIR)/main.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(LIB): $(addprefix $(BUILD_DIR)/,$(LIB_SRCS:.c=.o))
+	$(AR) rcs $@ $^
 
 # Reports narrowing/&sign conversions that -Wall -Wextra let through, e.g.
-# `int handled = FS_HANDLED;` or returning syscall()'s long as int.
+# `int handled = CAGED_FS_HANDLED;` or returning syscall()'s long as int.
 lint: seccomp-dep
 	@set -e; for f in $(LINT_SOURCES); do echo "== lint $$f"; \
 	  $(CC) $(CFLAGS) $(LINT_CFLAGS) $$f; done
@@ -92,22 +106,21 @@ seccomp-dep:
 	  $(CC) -x c -fsyntax-only - 2>/dev/null || \
 	  { echo "libseccomp headers not found: sudo apt install libseccomp-dev" >&2; exit 1; }
 
-$(BUILD_DIR)/caged: caged.c cli.c main.c caged.h cli.h
-	mkdir -p $(@D)
-	$(CC) $(CFLAGS) -o $@ caged.c cli.c main.c $(LDLIBS)
-
 unit: $(UNIT_BINS)
 	@set -e; for t in $(UNIT_BINS); do echo "== $$t"; $$t; done
 
-$(BUILD_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c caged.h cli.c cli.h
+# The test binaries link the objects instead of including the sources: the
+# helpers they drive are no longer static, and the header they need is
+# caged_internal.h / cli_internal.h.
+$(BUILD_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h $(HEADERS) $(BUILD_OBJS)
 	mkdir -p $(@D)
-	$(CC) $(TEST_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(LDLIBS)
+	$(CC) $(TEST_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(BUILD_OBJS) $(LDLIBS)
 
 # The pseudo-filter-code test uses the real libseccomp on purpose (it checks
-# the generated rules): no mocks, no fake_syscalls, and no cli.c either.
-$(BUILD_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
+# the generated rules): no mocks and no cli.c either.
+$(BUILD_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c $(HEADERS) $(addprefix $(BUILD_DIR)/,$(LIB_SRCS:.c=.o))
 	mkdir -p $(@D)
-	$(CC) $(TEST_CFLAGS) -o $@ $< $(LDLIBS)
+	$(CC) $(TEST_CFLAGS) -o $@ $< $(addprefix $(BUILD_DIR)/,$(LIB_SRCS:.c=.o)) $(LDLIBS)
 
 test: unit functional
 
@@ -129,13 +142,17 @@ coverage: $(COV_BINS)
 	      --fail-under-function 100 \
 	      $(COV_DIR)
 
-$(COV_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c caged.h cli.c cli.h
+$(COV_DIR)/%.o: %.c $(HEADERS)
 	mkdir -p $(@D)
-	$(CC) $(COV_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(LDLIBS)
+	$(CC) $(COV_CFLAGS) -c -o $@ $<
 
-$(COV_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
+$(COV_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h $(HEADERS) $(COV_OBJS)
 	mkdir -p $(@D)
-	$(CC) $(COV_CFLAGS) -o $@ $< $(LDLIBS)
+	$(CC) $(COV_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(COV_OBJS) $(LDLIBS)
+
+$(COV_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c $(HEADERS) $(addprefix $(COV_DIR)/,$(LIB_SRCS:.c=.o))
+	mkdir -p $(@D)
+	$(CC) $(COV_CFLAGS) -o $@ $< $(addprefix $(COV_DIR)/,$(LIB_SRCS:.c=.o)) $(LDLIBS)
 
 # Memcheck over the unit binaries. The production binary is deliberately out of
 # scope: it ends in execve, where valgrind does no leak check at all, or in exit
@@ -166,13 +183,17 @@ valgrind: $(UNIT_BINS)
 sanitize: $(SAN_BINS)
 	@set -e; for t in $(SAN_BINS); do echo "== $$t"; $$t; done
 
-$(SAN_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h caged.c caged.h cli.c cli.h
+$(SAN_DIR)/%.o: %.c $(HEADERS)
 	mkdir -p $(@D)
-	$(CC) $(SAN_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(LDLIBS)
+	$(CC) $(SAN_CFLAGS) -c -o $@ $<
 
-$(SAN_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c caged.c caged.h
+$(SAN_DIR)/test_%: $(UNIT)/test_%.c $(UNIT)/fake_syscalls.c $(UNIT)/fake_syscalls.h $(HEADERS) $(SAN_OBJS)
 	mkdir -p $(@D)
-	$(CC) $(SAN_CFLAGS) -o $@ $< $(LDLIBS)
+	$(CC) $(SAN_CFLAGS) $(WRAP_FULL) -o $@ $< $(UNIT)/fake_syscalls.c $(SAN_OBJS) $(LDLIBS)
+
+$(SAN_DIR)/test_seccomp_pfc: $(UNIT)/test_seccomp_pfc.c $(HEADERS) $(addprefix $(SAN_DIR)/,$(LIB_SRCS:.c=.o))
+	mkdir -p $(@D)
+	$(CC) $(SAN_CFLAGS) -o $@ $< $(addprefix $(SAN_DIR)/,$(LIB_SRCS:.c=.o)) $(LDLIBS)
 
 docs:
 	$(MAKE) -C $(DOCS_DIR) html

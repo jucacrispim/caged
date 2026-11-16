@@ -17,17 +17,18 @@
   along with caged. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#define main caged_program_main
-#include "../../caged.c"
-#include "../../cli.c"
-#undef main
-#include "fake_syscalls.h"
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
+
+#include "fake_syscalls.h"
+#include "../../cli_internal.h"
 
 void test_ro_only_one_value(void) {
   struct caged_opts opts = {0};

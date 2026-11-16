@@ -156,8 +156,8 @@ struct caged_opts {
   /*
     Descriptor the front end writes its diagnostics to (--report-fd). 0 means
     "off". It must be >= 3: 0..2 already survive the setup, and the value is
-    what close_inherited_fds keeps open and marks FD_CLOEXEC, so the command
-    never inherits it.
+    what caged_close_inherited_fds keeps open and marks FD_CLOEXEC, so the
+    command never inherits it.
   */
   int report_fd;
   int help;

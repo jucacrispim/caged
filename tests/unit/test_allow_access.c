@@ -17,12 +17,13 @@
   along with caged. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#define main caged_program_main
-#include "../../caged.c"
-#undef main
-#include "fake_syscalls.h"
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <errno.h>
+
+#include "fake_syscalls.h"
+#include "../../caged_internal.h"
 
 void test_allow_read_access_dir(void) {
   reset_fake();
@@ -30,12 +31,12 @@ void test_allow_read_access_dir(void) {
   fake.isdir_ret = 1;
   fake.add_rule_ret = 0;
 
-  int r = allow_read_access(7, "/some/dir");
+  int r = caged_allow_read_access(7, "/some/dir");
 
   assert(r == 0);
   assert(fake.open_calls_count == 1);
   assert(fake.add_calls_count == 1);
-  assert(fake.last_allowed_access == PERMS_READ);
+  assert(fake.last_allowed_access == CAGED_PERMS_READ);
   assert(fake.last_parent_fd == 9876);
 }
 
@@ -45,12 +46,12 @@ void test_allow_read_access_file(void) {
   fake.isdir_ret = 0;
   fake.add_rule_ret = 0;
 
-  int r = allow_read_access(7, "/some/file");
+  int r = caged_allow_read_access(7, "/some/file");
 
   assert(r == 0);
   assert(fake.add_calls_count == 1);
   // read perms for file exclude the dirs only perms
-  assert(fake.last_allowed_access == (PERMS_READ & ~PERMS_DIRS_ONLY));
+  assert(fake.last_allowed_access == (CAGED_PERMS_READ & ~CAGED_PERMS_DIRS_ONLY));
 }
 
 void test_allow_read_write_access_dir(void) {
@@ -59,11 +60,11 @@ void test_allow_read_write_access_dir(void) {
   fake.isdir_ret = 1;
   fake.add_rule_ret = 0;
 
-  int r = allow_read_write_access(7, "/some/dir", 9);
+  int r = caged_allow_read_write_access(7, "/some/dir", 9);
 
   assert(r == 0);
   assert(fake.add_calls_count == 1);
-  assert(fake.last_allowed_access == PERMS_READ_WRITE);
+  assert(fake.last_allowed_access == CAGED_PERMS_READ_WRITE);
 }
 
 void test_allow_read_write_access_file(void) {
@@ -72,11 +73,11 @@ void test_allow_read_write_access_file(void) {
   fake.isdir_ret = 0;
   fake.add_rule_ret = 0;
 
-  int r = allow_read_write_access(7, "/some/file", 9);
+  int r = caged_allow_read_write_access(7, "/some/file", 9);
 
   assert(r == 0);
   assert(fake.add_calls_count == 1);
-  assert(fake.last_allowed_access == (PERMS_READ_WRITE & ~PERMS_DIRS_ONLY));
+  assert(fake.last_allowed_access == (CAGED_PERMS_READ_WRITE & ~CAGED_PERMS_DIRS_ONLY));
 }
 
 void test_allow_access_open_fail(void) {
@@ -86,7 +87,7 @@ void test_allow_access_open_fail(void) {
   fake.add_rule_ret = 0;
 
   errno = 0;
-  int r = allow_read_access(7, "/nonexistent");
+  int r = caged_allow_read_access(7, "/nonexistent");
 
   assert(r == -1);
   assert(errno == ENOENT);
@@ -101,7 +102,7 @@ void test_allow_access_fstat_fail(void) {
   fake.add_rule_ret = 0;
 
   errno = 0;
-  int r = allow_read_access(7, "/x");
+  int r = caged_allow_read_access(7, "/x");
 
   assert(r == -1);
   assert(errno == EACCES);
@@ -117,7 +118,7 @@ void test_allow_access_add_rule_fail(void) {
   fake.add_rule_err = EINVAL;
 
   errno = 0;
-  int r = allow_read_access(7, "/x");
+  int r = caged_allow_read_access(7, "/x");
 
   assert(r == -1);
   assert(errno == EINVAL);

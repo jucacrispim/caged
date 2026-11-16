@@ -28,29 +28,24 @@ Layout
 Unit technique: include the source and wrap the syscalls
 --------------------------------------------------------
 
-Each unit test includes the production source directly, which is what gives it
-access to the ``static`` functions:
+Each unit test includes the header of the layer it drives and links the
+production objects:
 
 .. code-block:: c
 
-   #define main caged_program_main
-   #include "../../caged.c"
-   #undef main
-
-(``#undef main`` is required, otherwise the macro would rename the test's own
-``main``.)
+   #include "../../caged_internal.h"
 
 The tests that need the command-line helpers (``parse_cmd_line``,
-``print_help``, ``build_env``, ``warn_unsupported_features``) or the ``push_*``
-list helpers include ``cli.c`` right after ``caged.c``:
+``print_help``, ``warn_unsupported_features``) or the ``push_*`` list helpers
+include ``cli_internal.h`` as well, which pulls ``cli.h``:
 
 .. code-block:: c
 
-   #include "../../caged.c"
-   #include "../../cli.c"
+   #include "../../caged_internal.h"
+   #include "../../cli_internal.h"
 
-Both sources end up in the same translation unit. The two sets of ``static``
-functions are disjoint, so there is no collision.
+Every helper the tests drive is an ordinary symbol with a ``caged_`` prefix, so
+nothing has to be ``static`` and no test has to see the source.
 
 The kernel is replaced with the linker's ``--wrap`` facility: every call to a
 wrapped symbol becomes a ``__wrap_*`` stub, and the real one stays available as
@@ -91,17 +86,17 @@ real kernel to set it.
 Coverage
 --------
 
-``make coverage`` compiles all the test binaries with ``--coverage`` and
-``-fcondition-coverage``, runs them, and calls ``gcovr`` with a filter limited
-to ``caged.c`` and ``cli.c`` (each test includes the sources, so without the
-filter gcovr would sum the per-binary ``.gcda`` files and inflate the numbers).
-The gate fails below **100%** on lines, branches, decisions and functions, for
-the two files separately. Out-of-memory paths (a failing ``realloc``) are
-covered by mocking, not excluded.
+``make coverage`` compiles the production objects with ``--coverage`` and
+``-fcondition-coverage``, links the test binaries against them, runs them, and
+calls ``gcovr`` with one filter per measured file. The gate fails below **100%**
+on lines, branches, decisions and functions, for the six files (``caged.c``,
+``landlock.c``, ``seccomp.c``, ``namespaces.c``, ``env.c``, ``cli.c``)
+separately. Out-of-memory paths (a failing ``realloc``) are covered by mocking,
+not excluded.
 
-Only two regions carry ``GCOV_EXCL``: the body of ``die`` and ``main``, both now
-in ``main.c`` (the number is unchanged; the two functions simply moved out of
-``caged.c``). Both are exercised by the functional tests instead.
+Only two regions carry ``GCOV_EXCL``: the body of ``die`` and ``main``, both in
+``main.c``, which is not measured. Both are exercised by the functional tests
+instead.
 
 ``GCOV_EXCL`` is used only when explicitly requested; it is not a way to dodge a
 hard-to-test branch.

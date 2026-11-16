@@ -1,8 +1,9 @@
 Using caged as a library
 ========================
 
-caged is split along a library / command-line boundary: ``caged.c`` is the
-sandbox and ``caged.h`` its public interface, while ``cli.c`` / ``cli.h`` and
+caged is split along a library / command-line boundary. The sandbox is the
+five files ``caged.c``, ``landlock.c``, ``seccomp.c``, ``namespaces.c`` and
+``env.c``, and ``caged.h`` is its public interface. ``cli.c`` / ``cli.h`` and
 ``main.c`` make the executable. A program can link the library and wrap
 **its own process** in the sandbox at launch, which is the original reason for
 the split. See :doc:`internals/architecture` for how the pieces fit and
@@ -15,9 +16,11 @@ Building
 
    make lib
 
-This produces the static archive ``build/libcaged.a``, built from ``caged.o``:
-the sandbox alone, with no argument parser and no ``main``. A consumer adds
-``caged.h`` to its include path and links the archive plus libseccomp:
+This produces the static archive ``build/libcaged.a``, built from the five
+sandbox objects (``caged.o``, ``landlock.o``, ``seccomp.o``, ``namespaces.o``,
+``env.o``): the sandbox alone, with no argument parser and no ``main``. A
+consumer adds ``caged.h`` to its include path and links the archive plus
+libseccomp:
 
 .. code-block:: sh
 
@@ -253,7 +256,10 @@ still honours it afterwards.
 Limitations
 -----------
 
-The unit tests still ``#include "../../caged.c"`` to reach the ``static``
-helpers, so the archive is a packaging of the production code rather than the
-only consumer of it; giving the helpers external linkage and an internal
-header is a separate change.
+The archive exports the internal helpers as ordinary symbols. There is no
+visibility attribute and no version script, so a consumer that links it can
+call ``caged_allow_read_access`` and the rest. The names are prefixed to make a
+collision unlikely, not to hide them.
+
+Only a static archive is built. A shared object would need the same symbol
+visibility work before it could be shipped.

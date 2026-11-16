@@ -18,211 +18,26 @@
 */
 
 /*
-  The sandbox. The namespaces it can build for the command, the Landlock
-  ruleset and its rules, the seccomp filter, the resource limits and the
-  environment variables stuff.
+  The setup itself and the parts of it that do not belong to a single
+  subsystem: the resource limits, the inherited descriptors and the return
+  codes. The layers it drives are in landlock.c, seccomp.c, namespaces.c and
+  env.c.
 */
 
 #define _GNU_SOURCE
+
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/capability.h>
-#include <linux/landlock.h>
-#include <linux/netlink.h>
-#include <net/if.h>
-#include <sched.h>
-#include <seccomp.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
-#include <sys/mount.h>
-#include <sys/prctl.h>
 #include <sys/resource.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <sys/syscall.h>
 #include <unistd.h>
 
-#include "caged.h"
-
-/* I need to define this here because it's not defined in any
- header I can include.*/
-#ifndef SOCK_TYPE_MASK
-#define SOCK_TYPE_MASK 0xf
-#endif
-
-/* The user namespace configuration is write-only and lives in /proc. */
-#define PROC_SELF_SETGROUPS "/proc/self/setgroups"
-#define PROC_SELF_UID_MAP "/proc/self/uid_map"
-#define PROC_SELF_GID_MAP "/proc/self/gid_map"
-
-/*
-  Where --private-tmp and --private-shm mount the private directories.
-*/
-#define PRIVATE_TMP "/tmp"
-#define PRIVATE_SHM "/dev/shm"
-#define PRIVATE_TMPFS_OPTS "mode=1777,size=1g"
-
-/* fs access handled by the latest api */
-#define FS_HANDLED                                                             \
-  (LANDLOCK_ACCESS_FS_EXECUTE | LANDLOCK_ACCESS_FS_WRITE_FILE |                \
-   LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR |                \
-   LANDLOCK_ACCESS_FS_REMOVE_DIR | LANDLOCK_ACCESS_FS_REMOVE_FILE |            \
-   LANDLOCK_ACCESS_FS_MAKE_CHAR | LANDLOCK_ACCESS_FS_MAKE_DIR |                \
-   LANDLOCK_ACCESS_FS_MAKE_REG | LANDLOCK_ACCESS_FS_MAKE_SOCK |                \
-   LANDLOCK_ACCESS_FS_MAKE_FIFO | LANDLOCK_ACCESS_FS_MAKE_BLOCK |              \
-   LANDLOCK_ACCESS_FS_MAKE_SYM | LANDLOCK_ACCESS_FS_REFER |                    \
-   LANDLOCK_ACCESS_FS_TRUNCATE | LANDLOCK_ACCESS_FS_IOCTL_DEV |                \
-   LANDLOCK_ACCESS_FS_RESOLVE_UNIX)
-
-/* scopes restricted by default (added in Landlock ABI 6) */
-#define SCOPED (LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET | LANDLOCK_SCOPE_SIGNAL)
-
-/* net access handled by the latest api (added in Landlock ABI 4) */
-#define NET_HANDLED                                                            \
-  (LANDLOCK_ACCESS_NET_BIND_TCP | LANDLOCK_ACCESS_NET_CONNECT_TCP)
-
-/* restrict-self flags supported by the latest api: the log flags were added
-   in ABI 7 and TSYNC in ABI 8 */
-#define RESTRICT_FLAGS                                                         \
-  (LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |                                  \
-   LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |                                    \
-   LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF | LANDLOCK_RESTRICT_SELF_TSYNC)
-
-#define PERMS_READ                                                             \
-  (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR |                \
-   LANDLOCK_ACCESS_FS_EXECUTE)
-
-#define PERMS_READ_WRITE                                                       \
-  (PERMS_READ | LANDLOCK_ACCESS_FS_WRITE_FILE |                                \
-   LANDLOCK_ACCESS_FS_REMOVE_DIR | LANDLOCK_ACCESS_FS_REMOVE_FILE |            \
-   LANDLOCK_ACCESS_FS_MAKE_DIR | LANDLOCK_ACCESS_FS_MAKE_REG |                 \
-   LANDLOCK_ACCESS_FS_TRUNCATE | LANDLOCK_ACCESS_FS_RESOLVE_UNIX)
-
-/* fs access only relevant for directories */
-#define PERMS_DIRS_ONLY                                                        \
-  (LANDLOCK_ACCESS_FS_READ_DIR | LANDLOCK_ACCESS_FS_REMOVE_DIR |               \
-   LANDLOCK_ACCESS_FS_REMOVE_FILE | LANDLOCK_ACCESS_FS_MAKE_DIR |              \
-   LANDLOCK_ACCESS_FS_MAKE_REG)
-
-/*
-  The sandbox diagnostics declared in caged.h. They are file-global here so
-  the caller can report what went wrong after caged_setup returns.
-*/
-int seccomp_detail;
-int seccomp_failed_family = -1;
-const char *seccomp_failed_syscall;
-
-/*
-  The Landlock ABI version on the host. It is kept so we can report what
-  the kernel offers against what --require-abi asked for.
-*/
-long abi_found = -1;
+#include "caged_internal.h"
 
 /* Set by caged_setup from CAGED_DISABLE_WARNINGS, before environ is replaced */
 int caged_warnings_disabled;
-
-/*
-  System V IPC syscalls are blocked. They will return ENOSYS
-*/
-static const char *SYSV_IPC_SYSCALLS[] = {
-    "msgget",     "msgsnd", "msgrcv", "msgctl", "semget", "semop",
-    "semtimedop", "semctl", "shmget", "shmat",  "shmdt",  "shmctl",
-};
-
-/*
-  Namespace flags for clone().
-*/
-static const unsigned long long CLONE_NS_FLAGS[] = {
-    CLONE_NEWNS,   CLONE_NEWCGROUP, CLONE_NEWUTS, CLONE_NEWIPC,
-    CLONE_NEWUSER, CLONE_NEWPID,    CLONE_NEWNET, CLONE_NEWTIME,
-};
-
-#define CLONE_NS_N (sizeof CLONE_NS_FLAGS / sizeof CLONE_NS_FLAGS[0])
-
-/*
-  Syscalls that escape the sandbox, act on other processes or attack the
-  kernel are blocked. They will return ENOSYS.
-*/
-static const char *DENY_SYSCALLS[] = {
-    /* inspect or write the memory of another process */
-    "ptrace",
-    "process_vm_readv",
-    "process_vm_writev",
-    "pidfd_getfd",
-    "process_madvise",
-    "process_mrelease",
-    "kcmp",
-    /* the caller's own keyrings */
-    "keyctl",
-    "add_key",
-    "request_key",
-    /* kernel attack surface */
-    "io_uring_setup",
-    "bpf",
-    "perf_event_open",
-    "userfaultfd",
-    /* load code into the kernel, or take the machine down */
-    "init_module",
-    "finit_module",
-    "delete_module",
-    "kexec_load",
-    "kexec_file_load",
-    "reboot",
-    "swapon",
-    "swapoff",
-    "acct",
-    "quotactl",
-    "iopl",
-    "ioperm",
-    "modify_ldt",
-    "open_by_handle_at",
-    /*
-      Mounting and namespaces
-    */
-    "unshare",
-    "setns",
-    "mount",
-    "umount2",
-    "pivot_root",
-    "chroot",
-    "move_mount",
-    "open_tree",
-    "fsopen",
-    "fsconfig",
-    "fsmount",
-    "fspick",
-    "mount_setattr",
-    "clone3",
-};
-
-#define SYSV_IPC_N (sizeof SYSV_IPC_SYSCALLS / sizeof SYSV_IPC_SYSCALLS[0])
-#define DENY_SYSCALLS_N (sizeof DENY_SYSCALLS / sizeof DENY_SYSCALLS[0])
-
-/*
-  Environment variables that will be inherited by default.
-*/
-static const char *BASE_ENV[] = {
-    "PATH",
-    "HOME",
-    "LANG",
-    "LANGUAGE",
-    "LC_ALL",
-    "LC_CTYPE",
-    "LC_NUMERIC",
-    "LC_TIME",
-    "LC_COLLATE",
-    "LC_MONETARY",
-    "LC_MESSAGES",
-    "LC_PAPER",
-    "LC_NAME",
-    "LC_ADDRESS",
-    "LC_TELEPHONE",
-    "LC_MEASUREMENT",
-    "LC_IDENTIFICATION",
-};
-
-#define BASE_ENV_N (sizeof BASE_ENV / sizeof BASE_ENV[0])
 
 void caged_opts_free(struct caged_opts *opts) {
   free((void *)opts->r_dir);
@@ -249,498 +64,8 @@ void caged_opts_free(struct caged_opts *opts) {
   opts->cap_env = 0;
 }
 
-/*
-  Creates a new landlock ruleset.
-  By default it denies permission for all the handled accesses.
-  The handled accesses are held by the *attr pointer
-*/
-static long create_ruleset(const struct landlock_ruleset_attr *attr) {
-  return syscall(SYS_landlock_create_ruleset, attr,
-                 sizeof(struct landlock_ruleset_attr), 0);
-}
-
-/* Adds an exception (grants access) on the ruleset for the given accesses.
-   The accesses for the grants are held by the *pb pointer
- */
-static long add_rule(int ruleset_fd,
-                     const struct landlock_path_beneath_attr *pb) {
-  return syscall(SYS_landlock_add_rule, ruleset_fd, LANDLOCK_RULE_PATH_BENEATH,
-                 pb, 0);
-}
-
-/* Locks the current process and its children to the rules added up to point */
-static long restrict_self(int ruleset_fd, unsigned long long flags) {
-  if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
-    return -1;
-  }
-  return syscall(SYS_landlock_restrict_self, ruleset_fd, flags);
-}
-
-static long check_abi() {
-  return syscall(SYS_landlock_create_ruleset, NULL, 0,
-                 LANDLOCK_CREATE_RULESET_VERSION);
-}
-
-/*
-  Returns the handled fs accesses supported by the abi version available on
-  the host
-*/
-static unsigned long long get_handled_access_fs(long abi) {
-  unsigned long long handled = FS_HANDLED;
-  if (abi < 2) {
-    handled &= ~LANDLOCK_ACCESS_FS_REFER;
-  }
-  if (abi < 3) {
-    handled &= ~LANDLOCK_ACCESS_FS_TRUNCATE;
-  }
-  if (abi < 5) {
-    handled &= ~LANDLOCK_ACCESS_FS_IOCTL_DEV;
-  }
-  if (abi < 9) {
-    handled &= ~LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
-  }
-  return handled;
-}
-
-static unsigned long long get_perms_read_write(long abi) {
-  unsigned long long perms = PERMS_READ_WRITE;
-  if (abi < 3) {
-    perms &= ~LANDLOCK_ACCESS_FS_TRUNCATE;
-  }
-  if (abi < 9) {
-    perms &= ~LANDLOCK_ACCESS_FS_RESOLVE_UNIX;
-  }
-  return perms;
-}
-
-/*
-  Returns the scopes restricted by default and supported by the abi version
-  available on the host. Scopes were added in ABI 6.
-*/
-static unsigned long long get_handled_scopes(long abi) {
-  unsigned long long scopes = SCOPED;
-  if (abi < 6) {
-    scopes = 0;
-  }
-  return scopes;
-}
-
-/*
-  Returns the net accesses supported by the abi version available on the host.
-  Net accesses were added in ABI 4.
-*/
-static unsigned long long get_handled_access_net(long abi) {
-  unsigned long long handled = NET_HANDLED;
-  if (abi < 4) {
-    handled = 0;
-  }
-  return handled;
-}
-
-/*
-  Returns the restrict-self flags supported by the abi version available on
-  the host. The log flags were added in ABI 7 and TSYNC in ABI 8.
-*/
-static unsigned long long get_supported_restrict_flags(long abi) {
-  unsigned long long flags = RESTRICT_FLAGS;
-  if (abi < 7) {
-    flags &= ~(LANDLOCK_RESTRICT_SELF_LOG_SAME_EXEC_OFF |
-               LANDLOCK_RESTRICT_SELF_LOG_NEW_EXEC_ON |
-               LANDLOCK_RESTRICT_SELF_LOG_SUBDOMAINS_OFF);
-  }
-  if (abi < 8) {
-    flags &= ~LANDLOCK_RESTRICT_SELF_TSYNC;
-  }
-  return flags;
-}
-
-/* Grant some kind of access for a given path */
-static long allow_access(int ruleset_fd, const char *path,
-                         struct landlock_path_beneath_attr *pb) {
-  long r;
-  int parent_fd;
-  struct stat st;
-
-  parent_fd = open(path, O_PATH | O_CLOEXEC);
-  if (parent_fd < 0) {
-    return -1;
-  }
-
-  if (fstat(parent_fd, &st) < 0) {
-    close(parent_fd);
-    return -1;
-  }
-  if (!S_ISDIR(st.st_mode)) {
-    pb->allowed_access &= ~PERMS_DIRS_ONLY;
-  }
-  pb->parent_fd = parent_fd;
-  r = add_rule(ruleset_fd, pb);
-  close(pb->parent_fd);
-  return r;
-}
-
-/* Grant read access for a given path */
-static long allow_read_access(int ruleset_fd, const char *path) {
-  struct landlock_path_beneath_attr pb = {.allowed_access = PERMS_READ};
-
-  return allow_access(ruleset_fd, path, &pb);
-}
-
-/* Grant read and write access for a give path */
-static long allow_read_write_access(int ruleset_fd, const char *path,
-                                    long abi) {
-  struct landlock_path_beneath_attr pb = {.allowed_access =
-                                              get_perms_read_write(abi)};
-  return allow_access(ruleset_fd, path, &pb);
-}
-
-/* Adds a net rule granting the given access for a single port. */
-static long add_net_rule(int ruleset_fd, unsigned long long allowed_access,
-                         unsigned short port) {
-  struct landlock_net_port_attr attr = {
-      .allowed_access = allowed_access,
-      .port = port,
-  };
-  return syscall(SYS_landlock_add_rule, ruleset_fd, LANDLOCK_RULE_NET_PORT,
-                 &attr, 0);
-}
-
-/* Grant the ability to connect to the given port. */
-static long allow_net_connect_access(int ruleset_fd, unsigned short port) {
-  return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_CONNECT_TCP, port);
-}
-
-/* Grant the ability to bind the given port. */
-static long allow_net_bind_access(int ruleset_fd, unsigned short port) {
-  return add_net_rule(ruleset_fd, LANDLOCK_ACCESS_NET_BIND_TCP, port);
-}
-
-/*
-  Blocks the use of all socket families except for AF_INET, AF_INET6,
-  AF_NETLINK and AF_UNIX. These have individual rules for each one.
-*/
-static int deny_socket_families(scmp_filter_ctx ctx) {
-  int r;
-
-  for (int f = 0; f < AF_MAX; f++) {
-    if (f == AF_INET || f == AF_INET6 || f == AF_NETLINK || f == AF_UNIX) {
-      continue;
-    }
-    r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                               SCMP_A0(SCMP_CMP_EQ, (scmp_datum_t)f));
-    if (r < 0) {
-      seccomp_detail = r;
-      seccomp_failed_family = f;
-      return -1;
-    }
-  }
-  /* Families numbered above this build's AF_MAX are also blocked */
-  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                             SCMP_A0(SCMP_CMP_GE, AF_MAX));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  return 0;
-}
-
-/* Blocks the use of AF_INET and AF_INET6 SOCK_RAW as this could be used to
-   manually craft packets that could bypass the landlock rules.
-*/
-static int deny_inet_raw(scmp_filter_ctx ctx) {
-  int r;
-
-  r = seccomp_rule_add_exact(
-      ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 2,
-      SCMP_A0(SCMP_CMP_EQ, AF_INET),
-      SCMP_A1(SCMP_CMP_MASKED_EQ, SOCK_TYPE_MASK, SOCK_RAW));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  r = seccomp_rule_add_exact(
-      ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 2,
-      SCMP_A0(SCMP_CMP_EQ, AF_INET6),
-      SCMP_A1(SCMP_CMP_MASKED_EQ, SOCK_TYPE_MASK, SOCK_RAW));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  return 0;
-}
-
-/* Blocks the use of AF_NETLINK NETLINK_USERSOCK as this protocol is
-   used to IPC.
-*/
-static int deny_netlink_usersock(scmp_filter_ctx ctx) {
-  int r;
-
-  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 2,
-                             SCMP_A0(SCMP_CMP_EQ, AF_NETLINK),
-                             SCMP_A2(SCMP_CMP_EQ, NETLINK_USERSOCK));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  return 0;
-}
-
-/* Blocks the use of AF_UNIX. Used for IPC */
-static int deny_unix_sockets(scmp_filter_ctx ctx) {
-  int r;
-
-  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                             SCMP_A0(SCMP_CMP_EQ, AF_UNIX));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  return 0;
-}
-
-/* Blocks the use of AF_INET, AF_INET6 and AF_NETLINK */
-static int deny_network_sockets(scmp_filter_ctx ctx) {
-  int r;
-
-  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                             SCMP_A0(SCMP_CMP_EQ, AF_INET));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                             SCMP_A0(SCMP_CMP_EQ, AF_INET6));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(EACCES), SCMP_SYS(socket), 1,
-                             SCMP_A0(SCMP_CMP_EQ, AF_NETLINK));
-  if (r < 0) {
-    seccomp_detail = r;
-    return -1;
-  }
-  return 0;
-}
-
-/*
-  Blocks a clone() with new namespace.
-*/
-static int deny_clone_namespaces(scmp_filter_ctx ctx) {
-  for (size_t k = 0; k < CLONE_NS_N; k++) {
-    unsigned long long flag = CLONE_NS_FLAGS[k];
-    int r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(ENOSYS), SCMP_SYS(clone),
-                                   1, SCMP_A0(SCMP_CMP_MASKED_EQ, flag, flag));
-    if (r < 0) {
-      seccomp_detail = r;
-      return -1;
-    }
-  }
-  return 0;
-}
-
-/*
-  Denies each named syscall with ENOSYS. A name libseccomp cannot resolve
-  returns an error.
-*/
-static int deny_syscall_list(scmp_filter_ctx ctx, const char *const *names,
-                             size_t n) {
-  for (size_t k = 0; k < n; k++) {
-    int nr = seccomp_syscall_resolve_name(names[k]);
-    if (nr == __NR_SCMP_ERROR) {
-      seccomp_detail = -ENOSYS;
-      seccomp_failed_syscall = names[k];
-      return -1;
-    }
-    int r = seccomp_rule_add_exact(ctx, SCMP_ACT_ERRNO(ENOSYS), nr, 0);
-    if (r < 0) {
-      seccomp_detail = r;
-      seccomp_failed_syscall = names[k];
-      return -1;
-    }
-  }
-  return 0;
-}
-
-/* Blocks the system V ipc calls */
-static int deny_sysv_ipc(scmp_filter_ctx ctx) {
-  return deny_syscall_list(ctx, SYSV_IPC_SYSCALLS, SYSV_IPC_N);
-}
-
-/* Blocks the syscalls that escape the sandbox or attack the kernel */
-static int deny_dangerous_syscalls(scmp_filter_ctx ctx) {
-  return deny_syscall_list(ctx, DENY_SYSCALLS, DENY_SYSCALLS_N);
-}
-
-/*
-  Builds and loads the seccomp filter.
-*/
-static enum caged_return apply_seccomp(int allow_unix_sockets,
-                                       int allow_network_sockets,
-                                       int allow_sysv_ipc, int tsync) {
-  scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
-
-  seccomp_detail = 0;
-  seccomp_failed_family = -1;
-  seccomp_failed_syscall = NULL;
-  if (ctx == NULL) {
-    return CAGED_ERR_SECCOMP_INIT;
-  }
-  int r = 0;
-  if (tsync) {
-    r = seccomp_attr_set(ctx, SCMP_FLTATR_CTL_TSYNC, 1);
-    if (r < 0) {
-      seccomp_detail = r;
-      seccomp_release(ctx);
-      return CAGED_ERR_SECCOMP_TSYNC;
-    }
-  }
-  if (deny_socket_families(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_FAMILIES;
-  }
-  if (deny_inet_raw(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_INET_RAW;
-  }
-  if (deny_netlink_usersock(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_NETLINK;
-  }
-  if (!allow_unix_sockets && deny_unix_sockets(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_UNIX;
-  }
-  if (!allow_network_sockets && deny_network_sockets(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_NETWORK;
-  }
-  if (deny_clone_namespaces(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_CLONE_NS;
-  }
-  if (!allow_sysv_ipc && deny_sysv_ipc(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_SYSVIPC;
-  }
-  if (deny_dangerous_syscalls(ctx) < 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_SYSCALLS;
-  }
-  if (seccomp_load(ctx) != 0) {
-    seccomp_release(ctx);
-    return CAGED_ERR_SECCOMP_LOAD;
-  }
-  seccomp_release(ctx);
-  return CAGED_OK;
-}
-
-/*
-  Appends `entry` to a dynamic list of environment strings, growing the
-  backing array (doubling its capacity) when it is full. Returns 0 on
-  success, -1 on allocation failure.
-*/
-static int push_env_entry(char ***list, int *n, int *cap, const char *entry) {
-  if (*n == *cap) {
-    int new_cap = *cap ? *cap * 2 : 4;
-    char **grown = realloc(*list, (size_t)new_cap * sizeof **list);
-    if (grown == NULL) {
-      return -1;
-    }
-    *list = grown;
-    *cap = new_cap;
-  }
-  (*list)[(*n)++] = (char *)entry;
-  return 0;
-}
-
-/* Length of the NAME part of a NAME=VALUE entry. */
-static size_t env_name_len(const char *entry) {
-  const char *eq = strchr(entry, '=');
-  return eq == NULL ? strlen(entry) : (size_t)(eq - entry);
-}
-
-/* True when `entry`'s name is exactly the `name_len` bytes of `name`. */
-static int env_same_name(const char *entry, const char *name, size_t name_len) {
-  return env_name_len(entry) == name_len && strncmp(entry, name, name_len) == 0;
-}
-
-/* True when `entry` is one of the variables inherited by default. */
-static int env_is_base(const char *entry) {
-  for (size_t k = 0; k < BASE_ENV_N; k++) {
-    if (env_same_name(entry, BASE_ENV[k], strlen(BASE_ENV[k]))) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-/* True when `entry` is overridden by one of the opts' env entries. */
-static int env_overridden(const char *entry, const struct caged_opts *opts) {
-  for (int k = 0; k < opts->n_env; k++) {
-    if (env_same_name(entry, opts->env[k], env_name_len(opts->env[k]))) {
-      return 1;
-    }
-  }
-  return 0;
-}
-
-/*
-  Builds the environment variables. The default base, or
-  everything inherited with keep_env and the env values.
-  Returns a NULL-terminated array, or NULL on allocation failure.
-*/
-static char **build_env(const struct caged_opts *opts) {
-  char **env = NULL;
-  int n = 0;
-  int cap = 0;
-  int failed = 0;
-
-  if (environ != NULL) {
-    for (char **e = environ; *e != NULL; e++) {
-      if (!opts->keep_env && !env_is_base(*e)) {
-        continue;
-      }
-      if (env_overridden(*e, opts)) {
-        continue;
-      }
-      failed |= push_env_entry(&env, &n, &cap, *e) < 0;
-    }
-  }
-  for (int k = 0; k < opts->n_env; k++) {
-    failed |= push_env_entry(&env, &n, &cap, opts->env[k]) < 0;
-  }
-  failed |= push_env_entry(&env, &n, &cap, NULL) < 0;
-  if (failed) {
-    free(env);
-    return NULL;
-  }
-  return env;
-}
-
-/*
-  Replaces the process environment with the given entries. Anything not in
-  `env` is dropped from environ, so every child of this process starts with
-  the allowed variables only.
-*/
-static void replace_environ(char **env) {
-  clearenv();
-  for (int k = 0; env[k] != NULL; k++) {
-    const char *eq = strchr(env[k], '=');
-    if (eq == NULL) {
-      setenv(env[k], "", 1);
-      continue;
-    }
-    char *name = strndup(env[k], (size_t)(eq - env[k]));
-    if (name != NULL) {
-      setenv(name, eq + 1, 1);
-      free(name);
-    }
-  }
-}
-
 /* Sets soft and the hard limits. */
-static int set_limit(int resource, rlim_t value) {
+int caged_set_limit(int resource, rlim_t value) {
   struct rlimit rl = {.rlim_cur = value, .rlim_max = value};
   return setrlimit(resource, &rl);
 }
@@ -748,255 +73,25 @@ static int set_limit(int resource, rlim_t value) {
 /*
   Applies the resource limits. Core is always 0.
 */
-static int apply_rlimits(long max_procs) {
-  if (set_limit(RLIMIT_CORE, 0) < 0) {
+int caged_apply_rlimits(long max_procs) {
+  if (caged_set_limit(RLIMIT_CORE, 0) < 0) {
     return -1;
   }
-  if (max_procs > 0 && set_limit(RLIMIT_NPROC, (rlim_t)max_procs) < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-static int write_file(const char *path, const char *text) {
-  size_t len = strlen(text);
-  int fd = open(path, O_WRONLY | O_CLOEXEC);
-
-  if (fd < 0) {
-    return -1;
-  }
-  ssize_t written = write(fd, text, len);
-  int write_errno = errno;
-  close(fd);
-  if (written < 0) {
-    errno = write_errno;
-    return -1;
-  }
-  if ((size_t)written != len) {
-    /*
-      If written bytes is different than the text len it is a error
-      because a trucated write could match a wrong user.
-     */
-    errno = EIO;
+  if (max_procs > 0 && caged_set_limit(RLIMIT_NPROC, (rlim_t)max_procs) < 0) {
     return -1;
   }
   return 0;
-}
-
-/*
-  Writes an id map that maps the caller's own id to itself.
-*/
-static int write_id_map(const char *path, unsigned int id) {
-  char map[64];
-
-  (void)snprintf(map, sizeof map, "%u %u 1\n", id, id);
-  return write_file(path, map);
-}
-
-/*
-  Brings loopback up in the current network namespace.
-  When a new namespace is created, a loopback interface is
-  created but it's down.
-*/
-static int loopback_up(void) {
-  struct ifreq ifr = {0};
-  int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-
-  if (fd < 0) {
-    return -1;
-  }
-  memcpy(ifr.ifr_name, "lo", sizeof "lo");
-  if (ioctl(fd, SIOCGIFFLAGS, &ifr) < 0) {
-    close(fd);
-    return -1;
-  }
-  ifr.ifr_flags = (short)(ifr.ifr_flags | IFF_UP);
-  if (ioctl(fd, SIOCSIFFLAGS, &ifr) < 0) {
-    close(fd);
-    return -1;
-  }
-  close(fd);
-  return 0;
-}
-
-/*
-  Removes every capability from the process.
-
-  An EINVAL from PR_CAPBSET_DROP only means this kernel does not know the
-  capability number, so it is not a failure.
-*/
-static int drop_capabilities(void) {
-  struct __user_cap_header_struct header = {
-      .version = _LINUX_CAPABILITY_VERSION_3,
-      .pid = 0,
-  };
-  struct __user_cap_data_struct data[2] = {{0}};
-
-  for (int c = 0; c <= CAP_LAST_CAP; c++) {
-    if (prctl(PR_CAPBSET_DROP, c, 0, 0, 0) < 0 && errno != EINVAL) {
-      return -1;
-    }
-  }
-  if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) < 0) {
-    return -1;
-  }
-  if (syscall(SYS_capset, &header, data) < 0) {
-    return -1;
-  }
-  return 0;
-}
-
-/*
-  Creates a user namespace that maps the caller's own ids to themselves.
-*/
-static enum caged_return setup_userns(void) {
-  unsigned int uid = (unsigned int)geteuid();
-  unsigned int gid = (unsigned int)getegid();
-
-  if (unshare(CLONE_NEWUSER) < 0) {
-    return CAGED_ERR_USERNS_UNAVAILABLE;
-  }
-  /*
-    Writing "deny" to setgroups is what lets an unprivileged process write a
-    gid map.
-  */
-  if (write_file(PROC_SELF_SETGROUPS, "deny") < 0) {
-    return CAGED_ERR_USERNS_MAP;
-  }
-  if (write_id_map(PROC_SELF_UID_MAP, uid) < 0) {
-    return CAGED_ERR_USERNS_MAP;
-  }
-  if (write_id_map(PROC_SELF_GID_MAP, gid) < 0) {
-    return CAGED_ERR_USERNS_MAP;
-  }
-  return CAGED_OK;
-}
-
-/*
-  Creates the mount namespace the private directories of the sandbox live in.
-
-  "/" is made recursively private before anything is mounted: CLONE_NEWNS
-  copies the mount list but not the propagation, so a mount here would
-  otherwise reach the host's peer groups.
-*/
-static enum caged_return setup_mountns(void) {
-  if (unshare(CLONE_NEWNS) < 0) {
-    return CAGED_ERR_MOUNT;
-  }
-  if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) {
-    return CAGED_ERR_MOUNT;
-  }
-  return CAGED_OK;
-}
-
-/* Mounts a fresh, capped, nosuid/nodev tmpfs over `target`. */
-static int mount_tmpfs(const char *target) {
-  return mount("tmpfs", target, "tmpfs", MS_NOSUID | MS_NODEV,
-               PRIVATE_TMPFS_OPTS);
-}
-
-/*
-  Gives the process a /tmp of its own.
-
-  `src` NULL means a fresh tmpfs; otherwise `src` is bind-mounted over /tmp,
-  which is what a caller that still has to exchange files with the sandbox
-  needs.
-*/
-static enum caged_return setup_private_tmp(const char *src) {
-  if (src == NULL) {
-    return mount_tmpfs(PRIVATE_TMP) < 0 ? CAGED_ERR_MOUNT : CAGED_OK;
-  }
-  if (mount(src, PRIVATE_TMP, NULL, MS_BIND | MS_REC, NULL) < 0) {
-    return CAGED_ERR_MOUNT;
-  }
-  /*
-    A bind mount inherits the source's flags, so a second mount() is what
-    applies nosuid and nodev to it.
-  */
-  if (mount(NULL, PRIVATE_TMP, NULL,
-            MS_BIND | MS_REMOUNT | MS_NOSUID | MS_NODEV, NULL) < 0) {
-    return CAGED_ERR_MOUNT;
-  }
-  return CAGED_OK;
-}
-
-/*
-  Gives the process a /dev/shm of its own: a fresh tmpfs in the mount
-  namespace, sharing nothing with the host.
-*/
-static enum caged_return setup_private_shm(void) {
-  if (mount_tmpfs(PRIVATE_SHM) < 0) {
-    return CAGED_ERR_MOUNT;
-  }
-  return CAGED_OK;
-}
-
-/*
-  Creates a network namespace holding nothing but a working loopback.
-*/
-static enum caged_return setup_netns(void) {
-  if (unshare(CLONE_NEWNET) < 0) {
-    return CAGED_ERR_NETNS;
-  }
-  if (loopback_up() < 0) {
-    return CAGED_ERR_NETNS;
-  }
-  return CAGED_OK;
-}
-
-/*
-  Builds the namespaces the command will run in.
-
-  First create the user namespace and after that
-  create the mounts for /tmp and /dev/shm and the
-  net namespace for loopback
-*/
-static enum caged_return setup_namespaces(int private_tmp,
-                                          const char *private_tmp_src,
-                                          int private_shm, int loopback_only) {
-  enum caged_return r = setup_userns();
-
-  if (r != CAGED_OK) {
-    return r;
-  }
-  if (private_tmp || private_shm) {
-    r = setup_mountns();
-    if (r != CAGED_OK) {
-      return r;
-    }
-  }
-  if (private_tmp) {
-    r = setup_private_tmp(private_tmp_src);
-    if (r != CAGED_OK) {
-      return r;
-    }
-  }
-  if (private_shm) {
-    r = setup_private_shm();
-    if (r != CAGED_OK) {
-      return r;
-    }
-  }
-  if (loopback_only) {
-    r = setup_netns();
-    if (r != CAGED_OK) {
-      return r;
-    }
-  }
-  if (drop_capabilities() < 0) {
-    return CAGED_ERR_CAPABILITIES;
-  }
-  return CAGED_OK;
 }
 
 /*
   Closes every file descriptor inherited above stderr, except report_fd.
 */
-static int close_inherited_fds(int report_fd) {
+int caged_close_inherited_fds(int report_fd) {
   if (report_fd < 3) {
     return close_range(3, ~0U, 0);
   }
-  if (report_fd > 3 && close_range(3, (unsigned int)report_fd - 1, 0) < 0) {
+  if (report_fd > 3 &&
+      close_range(3, (unsigned int)report_fd - 1, 0) < 0) {
     return -1;
   }
   return close_range((unsigned int)report_fd + 1, ~0U, 0);
@@ -1005,7 +100,7 @@ static int close_inherited_fds(int report_fd) {
 /*
   True when the kernel's Landlock ABI meets the --require-abi floor.
 */
-static int abi_satisfies(long abi, long require) {
+int caged_abi_satisfies(long abi, long require) {
   return require <= 0 || abi >= require;
 }
 
@@ -1093,7 +188,7 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
   if (opts->report_fd >= 3 && fcntl(opts->report_fd, F_SETFD, FD_CLOEXEC) < 0) {
     return CAGED_ERR_REPORT_FD;
   }
-  if (apply_rlimits(opts->max_procs) < 0) {
+  if (caged_apply_rlimits(opts->max_procs) < 0) {
     return CAGED_ERR_RLIMIT;
   }
   /*
@@ -1104,79 +199,82 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
   */
   if (opts->loopback_only || opts->private_tmp || opts->private_shm) {
     enum caged_return ns =
-        setup_namespaces(opts->private_tmp, opts->private_tmp_src,
-                         opts->private_shm, opts->loopback_only);
+        caged_setup_namespaces(opts->private_tmp, opts->private_tmp_src,
+                               opts->private_shm, opts->loopback_only);
     if (ns != CAGED_OK) {
       return ns;
     }
   }
-  long abi = check_abi();
+  long abi = caged_check_abi();
   abi_found = abi;
   if (abi < 1) {
     return CAGED_ERR_NO_LANDLOCK;
   }
-  if (!abi_satisfies(abi, opts->require_abi)) {
+  if (!caged_abi_satisfies(abi, opts->require_abi)) {
     errno = ENOTSUP;
     return CAGED_ERR_ABI_TOO_OLD;
   }
-  unsigned long long handled = get_handled_access_fs(abi);
-  unsigned long long handled_net = get_handled_access_net(abi);
+  unsigned long long handled = caged_get_handled_access_fs(abi);
+  unsigned long long handled_net = caged_get_handled_access_net(abi);
   struct landlock_ruleset_attr r_perm = {
       .handled_access_fs = handled,
       .handled_access_net = handled_net & ~opts->released_net,
-      .scoped = get_handled_scopes(abi) & ~opts->released_scopes,
+      .scoped = caged_get_handled_scopes(abi) & ~opts->released_scopes,
   };
-  /* create_ruleset reports the raw syscall result */
-  long ruleset_ret = create_ruleset(&r_perm);
+  /* caged_create_ruleset reports the raw syscall result */
+  long ruleset_ret = caged_create_ruleset(&r_perm);
   if (ruleset_ret < 0) {
     return CAGED_ERR_CREATE_RULESET;
   }
   int ruleset = (int)ruleset_ret;
   for (int k = 0; k < opts->n_r; k++) {
-    if (allow_read_access(ruleset, opts->r_dir[k]) < 0) {
+    if (caged_allow_read_access(ruleset, opts->r_dir[k]) < 0) {
       return CAGED_ERR_READ_ACCESS;
     }
   }
   for (int k = 0; k < opts->n_rw; k++) {
-    if (allow_read_write_access(ruleset, opts->rw_dir[k], abi) < 0) {
+    if (caged_allow_read_write_access(ruleset, opts->rw_dir[k], abi) < 0) {
       return CAGED_ERR_RW_ACCESS;
     }
   }
   for (int k = 0; k < opts->n_connect; k++) {
-    if (allow_net_connect_access(ruleset, opts->connect_ports[k]) < 0) {
+    if (caged_allow_net_connect_access(ruleset, opts->connect_ports[k]) < 0) {
       return CAGED_ERR_CONNECT_ACCESS;
     }
   }
   for (int k = 0; k < opts->n_bind; k++) {
-    if (allow_net_bind_access(ruleset, opts->bind_ports[k]) < 0) {
+    if (caged_allow_net_bind_access(ruleset, opts->bind_ports[k]) < 0) {
       return CAGED_ERR_BIND_ACCESS;
     }
   }
-  if (restrict_self(ruleset, opts->restrict_flags &
-                                 get_supported_restrict_flags(abi)) < 0) {
+  if (caged_restrict_self(ruleset, opts->restrict_flags &
+                                       caged_get_supported_restrict_flags(
+                                           abi)) < 0) {
     return CAGED_ERR_RESTRICT_SELF;
   }
   close(ruleset);
   enum caged_return r =
-      apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets,
-                    opts->allow_sysv_ipc,
-                    (opts->restrict_flags & LANDLOCK_RESTRICT_SELF_TSYNC) != 0);
+      caged_apply_seccomp(opts->allow_unix_sockets, opts->allow_network_sockets,
+                          opts->allow_sysv_ipc,
+                          (opts->restrict_flags &
+                           LANDLOCK_RESTRICT_SELF_TSYNC) != 0);
   if (r != CAGED_OK) {
     return r;
   }
-  if (close_inherited_fds(opts->report_fd) < 0) {
+  if (caged_close_inherited_fds(opts->report_fd) < 0) {
     return CAGED_ERR_CLOSE_FDS;
   }
   /* The environment is the last step so the allowed entries are computed
-     from the inherited environ, which replace_environ() then drops. The
-     warning switch is read first because it is not part of the base set. */
+     from the inherited environ, which caged_replace_environ() then drops.
+     The warning switch is read first because it is not part of the base
+     set. */
   const char *disable = getenv("CAGED_DISABLE_WARNINGS");
   caged_warnings_disabled = disable != NULL && strcmp(disable, "1") == 0;
-  char **new_env = build_env(opts);
+  char **new_env = caged_build_env(opts);
   if (new_env == NULL) {
     return CAGED_ERR_ENV;
   }
-  replace_environ(new_env);
+  caged_replace_environ(new_env);
   if (env != NULL) {
     *env = new_env;
   } else {

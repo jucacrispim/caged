@@ -17,13 +17,15 @@
   along with caged. If not, see <http://www.gnu.org/licenses/>.
 */
 
-#define main caged_program_main
-#include "../../caged.c"
-#include "../../cli.c"
-#undef main
-#include "fake_syscalls.h"
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <errno.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "fake_syscalls.h"
+#include "../../cli_internal.h"
 
 /* Redirects stdout, runs print_help() and copies the captured text. */
 static void capture_help(char *buf, size_t size) {
