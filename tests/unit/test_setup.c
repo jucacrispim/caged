@@ -1400,6 +1400,75 @@ void test_setup_private_tmp_capset_error(void) {
   assert(fake.create_calls_count == 0);
 }
 
+/*
+  --private-shm: the same mount namespace as --private-tmp, with a fresh tmpfs
+  over /dev/shm instead.
+*/
+void test_setup_private_shm_tmpfs_ok(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+  opts.private_shm = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.unshare_flags[0] == (unsigned long)CLONE_NEWUSER);
+  assert(fake.unshare_flags[1] == (unsigned long)CLONE_NEWNS);
+  assert(fake.ioctl_calls_count == 0);
+  /* "/" private, then the tmpfs over /dev/shm: /tmp is untouched */
+  assert(fake.mount_calls_count == 2);
+  assert(fake.mount_sources[0] == NULL);
+  assert(strcmp(fake.mount_targets[0], "/") == 0);
+  assert(fake.mount_flags[0] == (unsigned long)(MS_REC | MS_PRIVATE));
+  assert(strcmp(fake.mount_sources[1], "tmpfs") == 0);
+  assert(strcmp(fake.mount_targets[1], "/dev/shm") == 0);
+  assert(strcmp(fake.mount_fstypes[1], "tmpfs") == 0);
+  assert(strcmp(fake.mount_data[1], "mode=1777,size=1g") == 0);
+  assert(fake.mount_flags[1] == (unsigned long)(MS_NOSUID | MS_NODEV));
+  assert(fake.capset_calls_count == 1);
+  /* the policy is built against the new /dev/shm as well */
+  assert(fake.create_calls_count == 1);
+  assert(fake.seccomp_load_calls_count == 1);
+}
+
+/* both private directories share a single mount namespace */
+void test_setup_private_tmp_and_shm(void) {
+  setup_reaches_seccomp();
+
+  struct caged_opts opts = {0};
+  opts.private_tmp = 1;
+  opts.private_shm = 1;
+
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.unshare_flags[0] == (unsigned long)CLONE_NEWUSER);
+  assert(fake.unshare_flags[1] == (unsigned long)CLONE_NEWNS);
+  /* "/" private once, then /tmp, then /dev/shm */
+  assert(fake.mount_calls_count == 3);
+  assert(strcmp(fake.mount_targets[0], "/") == 0);
+  assert(strcmp(fake.mount_targets[1], "/tmp") == 0);
+  assert(strcmp(fake.mount_targets[2], "/dev/shm") == 0);
+  assert(fake.capset_calls_count == 1);
+}
+
+/* the tmpfs over /dev/shm cannot be mounted: nothing else runs */
+void test_setup_private_shm_mount_error(void) {
+  setup_reaches_seccomp();
+  fake.mount_ret = -1;
+  fake.mount_err = EPERM;
+  fake.mount_fail_at = 2;
+
+  struct caged_opts opts = {0};
+  opts.private_shm = 1;
+
+  errno = 0;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(errno == EPERM);
+  assert(fake.mount_calls_count == 2);
+  assert(fake.capset_calls_count == 0);
+  assert(fake.create_calls_count == 0);
+}
+
 /* test if every  return code have a message */
 void test_strreturn(void) {
   enum caged_return codes[] = {
@@ -1610,6 +1679,9 @@ int main(void) {
   test_setup_private_tmp_bind_error();
   test_setup_private_tmp_remount_error();
   test_setup_private_tmp_capset_error();
+  test_setup_private_shm_tmpfs_ok();
+  test_setup_private_tmp_and_shm();
+  test_setup_private_shm_mount_error();
   test_strreturn();
   test_strreturn_unknown_error();
   test_warn_none_when_all_supported();

@@ -73,6 +73,7 @@ void test_print_help(void) {
   assert(strstr(buf, "--allow-sysv-ipc") != NULL);
   assert(strstr(buf, "--loopback-only") != NULL);
   assert(strstr(buf, "--private-tmp [PATH]") != NULL);
+  assert(strstr(buf, "--private-shm") != NULL);
   assert(strstr(buf, "--max-procs N") != NULL);
   assert(strstr(buf, "--require-abi N") != NULL);
   assert(strstr(buf, "--keep-env") != NULL);

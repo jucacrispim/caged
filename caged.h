@@ -132,6 +132,21 @@ struct caged_opts {
     does not free it.
   */
   const char *private_tmp_src;
+  /*
+    Give the command a /dev/shm of its own: a fresh tmpfs mounted over it in
+    the same mount namespace private_tmp uses. The shared-memory segment of
+    the host (and of every other sandbox) stops being reachable from inside,
+    which is what --rw /dev/shm would otherwise expose.
+
+    There is no bind form on purpose: a /dev/shm shared with the host is the
+    file exchange --private-tmp PATH exists for, and sharing it defeats the
+    point of the option.
+
+    Like private_tmp it grants nothing: without --rw /dev/shm the command
+    still cannot use the directory. What changes is which directory that
+    grant resolves against.
+  */
+  int private_shm;
   long max_procs;
   long require_abi;
   int keep_env;

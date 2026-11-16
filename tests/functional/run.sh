@@ -57,17 +57,17 @@ if [ -z "$PYTHON" ] ||
   printf '       tests will fail. Set PYTHON=/path/to/python3 to override.\n' >&2
 fi
 
-# The namespace options (--loopback-only, --private-tmp) need unprivileged user
-# namespaces, and a usable /proc to write the id maps. A host that forbids them
-# (kernel.unprivileged_userns_clone = 0, AppArmor on Ubuntu 23.10+) cannot run
-# these tests at all, and neither can a caged running inside another sandbox
-# that denies /proc. Probe once, so one environmental cause does not look like a
-# dozen broken tests.
+# The namespace options (--loopback-only, --private-tmp, --private-shm) need
+# unprivileged user namespaces, and a usable /proc to write the id maps. A host
+# that forbids them (kernel.unprivileged_userns_clone = 0, AppArmor on Ubuntu
+# 23.10+) cannot run these tests at all, and neither can a caged running inside
+# another sandbox that denies /proc. Probe once, so one environmental cause does
+# not look like a dozen broken tests.
 USER_NS=1
 if ! CAGED_DISABLE_WARNINGS=1 $CAGED $RO --loopback-only -- true >/dev/null 2>&1; then
   USER_NS=0
-  printf 'WARN - user namespaces are unavailable; the --loopback-only and\n' >&2
-  printf '       --private-tmp tests will be skipped.\n' >&2
+  printf 'WARN - user namespaces are unavailable; the --loopback-only,\n' >&2
+  printf '       --private-tmp and --private-shm tests will be skipped.\n' >&2
 fi
 
 # skip_no_userns NAME  (returns 1 when the test must not run)
@@ -712,6 +712,76 @@ print('ok' if 1000 * 1024 * 1024 <= total <= 1024 ** 3 else total)
   check "private-tmp: the tmpfs is capped at 1 GiB" ok "$out"
 }
 
+# --private-shm is the same mount namespace as --private-tmp, with a fresh
+# tmpfs over /dev/shm: shared memory is a second world-writable exchange point,
+# and --rw /dev/shm on the host reaches every other process of the session.
+
+# /dev/shm is writable when it is granted
+test_private_shm_writes() {
+  if ! skip_no_userns "private-shm: /dev/shm is writable when granted"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-shm --rw /dev/shm -- \
+        sh -c 'echo hi > /dev/shm/x && cat /dev/shm/x' 2>&1)
+  check "private-shm: /dev/shm is writable when granted" hi "$out"
+}
+
+# a file the host left in /dev/shm does not exist inside the sandbox
+test_private_shm_hides_host_shm() {
+  if ! skip_no_userns "private-shm: the host's /dev/shm is not visible inside"; then
+    return
+  fi
+  host_file="/dev/shm/caged-private-shm-host.$$"
+  if ! printf 'host\n' > "$host_file" 2>/dev/null; then
+    ok "private-shm: hides the host's /dev/shm (skipped: host /dev/shm unwritable)"
+    return
+  fi
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-shm --rw /dev/shm -- \
+      cat "$host_file" >/dev/null 2>&1
+  rc=$?
+  rm -f "$host_file"
+  check_ne "private-shm: the host's /dev/shm is not visible inside" 0 "$rc"
+}
+
+# and the other direction: what the sandbox writes disappears with it
+test_private_shm_does_not_leak_to_host() {
+  if ! skip_no_userns "private-shm: writes stay inside the sandbox"; then
+    return
+  fi
+  leak="/dev/shm/caged-private-shm-leak.$$"
+  rm -f "$leak" 2>/dev/null
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-shm --rw /dev/shm -- \
+      sh -c "echo leaked > $leak" >/dev/null 2>&1
+  if [ -e "$leak" ]; then
+    bad "private-shm: writes stay inside the sandbox ($leak exists on the host)"
+    rm -f "$leak" 2>/dev/null
+  else
+    ok "private-shm: writes stay inside the sandbox"
+  fi
+}
+
+# the option does not grant anything by itself
+test_private_shm_without_rw_is_denied() {
+  if ! skip_no_userns "private-shm does not grant /dev/shm"; then
+    return
+  fi
+  CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-shm -- \
+      sh -c 'echo x > /dev/shm/x' >/dev/null 2>&1
+  check_ne "private-shm does not grant /dev/shm" 0 $?
+}
+
+# both private directories live in the same mount namespace
+test_private_tmp_and_shm() {
+  if ! skip_no_userns "private-tmp and private-shm share one mount namespace"; then
+    return
+  fi
+  out=$(CAGED_DISABLE_WARNINGS=1 $CAGED $RO --private-tmp --private-shm \
+        --rw /tmp --rw /dev/shm -- \
+        sh -c 'echo a > /tmp/a && echo b > /dev/shm/b && cat /tmp/a /dev/shm/b')
+  check "private-tmp and private-shm share one mount namespace" "a b" \
+    "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/ $//')"
+}
+
 test_sysv_ipc_denied() {
   $CAGED $RO -- ipcmk -M 1024 >/dev/null 2>&1
   check_ne "sysv IPC denied by default" 0 $?
@@ -1059,6 +1129,11 @@ main() {
   test_private_tmp_bind_source
   test_private_tmp_without_rw_is_denied
   test_private_tmp_tmpfs_size
+  test_private_shm_writes
+  test_private_shm_hides_host_shm
+  test_private_shm_does_not_leak_to_host
+  test_private_shm_without_rw_is_denied
+  test_private_tmp_and_shm
 
   test_sysv_ipc_denied
   test_sysv_ipc_allowed_with_flag

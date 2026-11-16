@@ -1,6 +1,144 @@
 Changelog
 =========
 
+Unreleased
+----------
+
+Four changes are pending: three new options that build namespaces for the
+command (a private ``/tmp``, a private ``/dev/shm`` and a private network), and
+a closed seccomp denylist.
+
+``--private-tmp``
+~~~~~~~~~~~~~~~~~
+
+New option: the sandbox builds a **mount namespace** for the command and
+mounts something else over ``/tmp`` in it — a fresh, 1 GiB, ``nosuid``/``nodev``
+tmpfs, or the directory given as an argument, bind-mounted there. The host's
+``/tmp`` stops being reachable from inside, and what the sandbox writes there
+dies with it (or lands in the bind source, when one was given).
+
+The point is the pairing with ``--rw /tmp``: the filesystem ruleset is built
+after the mount, so that grant covers the private directory instead of the
+world-writable one every process of the session shares. The option itself
+grants nothing. See :ref:`private-tmp` in the usage guide.
+
+Like ``--loopback-only`` it needs an unprivileged user namespace and it is
+fail-closed, and it shares the same single-threaded requirement (so no
+``--tsync``). It does not touch ``/dev/shm`` — that is ``--private-shm``.
+
+``--private-shm``
+~~~~~~~~~~~~~~~~~
+
+New option: a fresh 1 GiB, ``nosuid``/``nodev``, ``1777`` tmpfs mounted over
+``/dev/shm`` in the same mount namespace ``--private-tmp`` uses, so the two
+compose into a single ``unshare(CLONE_NEWNS)``. The host's shared memory stops
+being reachable from inside and the sandbox's stops being reachable from
+outside, which is what makes ``--rw /dev/shm`` mean the sandbox's own scratch
+space instead of a world-writable directory the whole session shares. There is
+no bind form on purpose — a ``/dev/shm`` shared with the host is what
+``--private-tmp PATH`` is for.
+
+It grants nothing on its own, and it has the same requirements as
+``--private-tmp`` (unprivileged user namespace, usable ``/proc`` during the
+setup, single-threaded). ``CAGED_ERR_MOUNT`` covers a failed mount of either
+directory, so its message was generalised to ``error setting up a private
+mount``.
+
+``--loopback-only``
+~~~~~~~~~~~~~~~~~~~
+
+New option: the sandbox builds a **user and a network namespace** for the
+command, brings loopback up inside it, drops every capability and only then
+installs Landlock and seccomp. The command runs in a network stack where
+nothing but ``127.0.0.1`` exists, so "reach the host's localhost", "reach the
+LAN" and "send a UDP datagram out" stop being policy questions and become
+routing facts: they fail with ``ENETUNREACH``, not ``EACCES``.
+
+It had to be a namespace because no other layer can express an address. A
+Landlock ``NET_PORT`` rule has no address field, and seccomp cannot
+dereference ``connect()``'s ``sockaddr``. Topology is the one mechanism that
+can say "loopback only", and it is also the only one that closes UDP while the
+``AF_INET`` family is released. See :ref:`loopback-only` in the usage guide.
+
+The option is orthogonal to ``--allow-network-sockets`` on purpose, and it is
+fail-closed: if the user namespace cannot be created or the id maps cannot be
+written (running inside another sandbox that denies ``/proc``, for instance),
+the setup fails instead of running without the namespace. ``unshare`` requires
+a single-threaded process, so ``--loopback-only`` and ``--tsync`` cannot be
+combined.
+
+Breaking changes
+~~~~~~~~~~~~~~~~
+
+- ``enum caged_return`` gained ``CAGED_ERR_USERNS_UNAVAILABLE``,
+  ``CAGED_ERR_USERNS_MAP``, ``CAGED_ERR_NETNS``, ``CAGED_ERR_CAPABILITIES``
+  and (for ``--private-tmp`` and ``--private-shm``) ``CAGED_ERR_MOUNT``. They
+  were appended **after** ``CAGED_ERR_REPORT_FD``, so no existing code shifts;
+  an embedder that switches on the enum has five new cases to handle, and
+  ``-Wswitch`` says so.
+- ``struct caged_opts`` gained ``private_tmp`` and ``private_tmp_src``, next to
+  ``loopback_only``, and ``private_shm`` right after them. They are therefore
+  in the middle of the struct, and the fields declared after them
+  (``max_procs`` onwards) move. Designated initializers — the supported way,
+  and what the examples use — are unaffected; an embedder that filled the
+  struct positionally has to be recompiled.
+- Landlock is no longer the only kernel feature the setup can fail on: on a
+  host without unprivileged user namespaces ``--loopback-only`` fails at the
+  ``unshare``, before any ruleset exists. Nothing changes for runs that do not
+  use the option.
+
+Seccomp denylist
+~~~~~~~~~~~~~~~~
+
+The seccomp denylist was closed: the calls that escape the sandbox through a
+namespace, a mount, a module load or a kernel interface are now denied. No
+option changes and no granted behaviour changes; what changes is what the
+sandbox refuses.
+
+Breaking changes
+................
+
+- ``enum caged_return`` gained ``CAGED_ERR_SECCOMP_CLONE_NS``, inserted after
+  ``CAGED_ERR_SECCOMP_NETWORK`` to keep the pipeline order. Every code after
+  it shifts by one. An embedder that compares the enum symbolically (the
+  supported way, and what ``caged_strreturn`` does) is unaffected; one that
+  stored or compared the numbers is not. Fix: recompile.
+- New rules in the filter mean a host whose libseccomp cannot resolve one of
+  the new names now fails the setup instead of installing a partial filter.
+  The names in question are old (``unshare``, ``mount``, ``clone3``, …), so
+  the practical floor moves to libseccomp 2.5.4 for ``mount_setattr``.
+
+Policy changes
+..............
+
+- ``deny_dangerous_syscalls`` covers three more groups:
+  ``process_mrelease``; ``init_module``/``finit_module``/``delete_module``,
+  ``kexec_load``/``kexec_file_load``, ``reboot``, ``swapon``/``swapoff``,
+  ``acct``, ``quotactl``, ``iopl``/``ioperm``, ``modify_ldt`` and
+  ``open_by_handle_at``; and ``unshare``, ``setns``, ``mount``, ``umount2``,
+  ``pivot_root``, ``chroot``, ``move_mount``, ``open_tree``, ``fsopen``,
+  ``fsconfig``, ``fsmount``, ``fspick`` and ``mount_setattr``.
+- New ``deny_clone_namespaces``: ``clone`` with any ``CLONE_NEW*`` flag is
+  denied, one masked comparison per flag, so a call asking for several at once
+  is caught. ``clone3`` is denied whole — its flags sit behind a pointer
+  seccomp does not dereference — which makes callers fall back to ``clone``.
+- Why: a new mount namespace can overmount what Landlock granted, and a new
+  user namespace hands out ``CAP_SYS_ADMIN`` inside it. Before this, a
+  command inside the sandbox could open a user namespace at all; now it
+  cannot. ``fork()`` and thread creation are unaffected (they ask for no
+  namespace flag), and neither is the fallback path inside libc, which is
+  tested.
+
+Internal
+~~~~~~~~
+
+- ``setup_namespaces`` no longer takes ``struct caged_opts``: it takes the four
+  fields it reads (``private_tmp``, ``private_tmp_src``, ``private_shm``,
+  ``loopback_only``), the way ``apply_seccomp`` takes the three flags it uses.
+  The function is static, so no embedder sees this; what it buys is that the
+  call graph says which options a step depends on instead of handing every step
+  the whole struct.
+
 v0.7.0
 ------
 

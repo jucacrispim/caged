@@ -952,6 +952,37 @@ void test_private_tmp_combined(void) {
 }
 
 /* --private-tmp as the last argument has no source and no command */
+/* --private-shm takes no value, so the next token is left alone */
+void test_private_shm_without_source(void) {
+  struct caged_opts opts = {0};
+  char **cmd = NULL;
+  char *argv[] = {"caged", "--private-shm", "--", "true", NULL};
+
+  assert(parse_cmd_line(4, argv, &opts, &cmd) == 0);
+  assert(opts.private_shm == 1);
+  assert(opts.private_tmp == 0);
+  assert(strcmp(cmd[0], "true") == 0);
+
+  caged_opts_free(&opts);
+}
+
+/* --private-shm combines with --private-tmp: one mount namespace, two mounts */
+void test_private_shm_combined(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged", "--private-shm", "--private-tmp", "--rw",
+                  "/dev/shm", "--", "true", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(8, argv, &opts, NULL) == 0);
+  assert(opts.private_shm == 1);
+  assert(opts.private_tmp == 1);
+  assert(opts.private_tmp_src == NULL);
+  assert(opts.n_rw == 1);
+  assert(strcmp(opts.rw_dir[0], "/dev/shm") == 0);
+
+  caged_opts_free(&opts);
+}
+
 void test_private_tmp_missing_command(void) {
   struct caged_opts opts = {0};
   char *argv[] = {"caged", "--private-tmp", NULL};
@@ -1108,6 +1139,8 @@ int main(void) {
   test_private_tmp_with_source();
   test_private_tmp_followed_by_option();
   test_private_tmp_combined();
+  test_private_shm_without_source();
+  test_private_shm_combined();
   test_private_tmp_missing_command();
   test_report_line_off();
   test_report_fd_reports_usage_error_before_the_flag();

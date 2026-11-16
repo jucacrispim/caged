@@ -57,13 +57,11 @@
 #define PROC_SELF_GID_MAP "/proc/self/gid_map"
 
 /*
-  Where --private-tmp mounts the private directory, and with which options.
-  mode=1777 gives it the sticky-bit semantics of a real /tmp; size=1g keeps an
-  unattended write loop from eating the host's memory (tmpfs defaults to half
-  of the RAM, which is far more than a sandbox should ever get).
+  Where --private-tmp and --private-shm mount the private directories.
 */
 #define PRIVATE_TMP "/tmp"
-#define PRIVATE_TMP_OPTS "mode=1777,size=1g"
+#define PRIVATE_SHM "/dev/shm"
+#define PRIVATE_TMPFS_OPTS "mode=1777,size=1g"
 
 /* fs access handled by the latest api */
 #define FS_HANDLED                                                             \
@@ -850,11 +848,6 @@ static int drop_capabilities(void) {
 
 /*
   Creates a user namespace that maps the caller's own ids to themselves.
-
-  This is what makes the namespaces of the sandbox possible without
-  privileges: inside the new user namespace the process holds a full
-  capability set, and therefore owns the mount and network namespaces it
-  creates next. Those capabilities are dropped before the command runs.
 */
 static enum caged_return setup_userns(void) {
   unsigned int uid = (unsigned int)geteuid();
@@ -880,29 +873,38 @@ static enum caged_return setup_userns(void) {
 }
 
 /*
-  Gives the process a /tmp of its own.
+  Creates the mount namespace the private directories of the sandbox live in.
 
-  `src` NULL means a fresh tmpfs; otherwise `src` is bind-mounted over /tmp,
-  which is what a caller that still has to exchange files with the sandbox
-  needs.
-
-  The mount namespace comes first, and "/" is made recursively private before
-  anything is mounted: CLONE_NEWNS copies the mount list but not the
-  propagation, so a mount here would otherwise reach the host's peer groups.
+  "/" is made recursively private before anything is mounted: CLONE_NEWNS
+  copies the mount list but not the propagation, so a mount here would
+  otherwise reach the host's peer groups.
 */
-static enum caged_return setup_private_tmp(const char *src) {
+static enum caged_return setup_mountns(void) {
   if (unshare(CLONE_NEWNS) < 0) {
     return CAGED_ERR_MOUNT;
   }
   if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) {
     return CAGED_ERR_MOUNT;
   }
+  return CAGED_OK;
+}
+
+/* Mounts a fresh, capped, nosuid/nodev tmpfs over `target`. */
+static int mount_tmpfs(const char *target) {
+  return mount("tmpfs", target, "tmpfs", MS_NOSUID | MS_NODEV,
+               PRIVATE_TMPFS_OPTS);
+}
+
+/*
+  Gives the process a /tmp of its own.
+
+  `src` NULL means a fresh tmpfs; otherwise `src` is bind-mounted over /tmp,
+  which is what a caller that still has to exchange files with the sandbox
+  needs.
+*/
+static enum caged_return setup_private_tmp(const char *src) {
   if (src == NULL) {
-    if (mount("tmpfs", PRIVATE_TMP, "tmpfs", MS_NOSUID | MS_NODEV,
-              PRIVATE_TMP_OPTS) < 0) {
-      return CAGED_ERR_MOUNT;
-    }
-    return CAGED_OK;
+    return mount_tmpfs(PRIVATE_TMP) < 0 ? CAGED_ERR_MOUNT : CAGED_OK;
   }
   if (mount(src, PRIVATE_TMP, NULL, MS_BIND | MS_REC, NULL) < 0) {
     return CAGED_ERR_MOUNT;
@@ -913,6 +915,17 @@ static enum caged_return setup_private_tmp(const char *src) {
   */
   if (mount(NULL, PRIVATE_TMP, NULL,
             MS_BIND | MS_REMOUNT | MS_NOSUID | MS_NODEV, NULL) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  return CAGED_OK;
+}
+
+/*
+  Gives the process a /dev/shm of its own: a fresh tmpfs in the mount
+  namespace, sharing nothing with the host.
+*/
+static enum caged_return setup_private_shm(void) {
+  if (mount_tmpfs(PRIVATE_SHM) < 0) {
     return CAGED_ERR_MOUNT;
   }
   return CAGED_OK;
@@ -934,25 +947,37 @@ static enum caged_return setup_netns(void) {
 /*
   Builds the namespaces the command will run in.
 
-  The user namespace comes first and is built once, whichever option asked
-  for a namespace: it is what makes the rest possible without privileges. The
-  capabilities it grants are dropped last, after the mounts and the network
-  setup that need them and before Landlock and seccomp: a sandbox whose
-  command starts with capabilities is easily escaped.
+  First create the usernamespace and after that
+  create the mounts for /tmp e /dev/shm and the
+  net namespace for loopback
 */
-static enum caged_return setup_namespaces(const struct caged_opts *opts) {
+static enum caged_return setup_namespaces(int private_tmp,
+                                          const char *private_tmp_src,
+                                          int private_shm, int loopback_only) {
   enum caged_return r = setup_userns();
 
   if (r != CAGED_OK) {
     return r;
   }
-  if (opts->private_tmp) {
-    r = setup_private_tmp(opts->private_tmp_src);
+  if (private_tmp || private_shm) {
+    r = setup_mountns();
     if (r != CAGED_OK) {
       return r;
     }
   }
-  if (opts->loopback_only) {
+  if (private_tmp) {
+    r = setup_private_tmp(private_tmp_src);
+    if (r != CAGED_OK) {
+      return r;
+    }
+  }
+  if (private_shm) {
+    r = setup_private_shm();
+    if (r != CAGED_OK) {
+      return r;
+    }
+  }
+  if (loopback_only) {
     r = setup_netns();
     if (r != CAGED_OK) {
       return r;
@@ -1043,7 +1068,7 @@ const char *caged_strreturn(enum caged_return r) {
   case CAGED_ERR_CAPABILITIES:
     return "error dropping capabilities";
   case CAGED_ERR_MOUNT:
-    return "error setting up the private /tmp";
+    return "error setting up a private mount";
   }
   return "unknown error";
 }
@@ -1074,11 +1099,13 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
   /*
     The namespaces must come before landlock and seccomp: they need the
     unshare, the mount and the /proc writes those layers deny, and the
-    filesystem policy has to be built against the /tmp the command will
-    actually see.
+    filesystem policy has to be built against the /tmp and /dev/shm the
+    command will actually see.
   */
-  if (opts->loopback_only || opts->private_tmp) {
-    enum caged_return ns = setup_namespaces(opts);
+  if (opts->loopback_only || opts->private_tmp || opts->private_shm) {
+    enum caged_return ns =
+        setup_namespaces(opts->private_tmp, opts->private_tmp_src,
+                         opts->private_shm, opts->loopback_only);
     if (ns != CAGED_OK) {
       return ns;
     }
