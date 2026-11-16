@@ -1,20 +1,20 @@
 Rules and rights
 ================
 
-This page explains the semantics behind each option — what the underlying
-Landlock right actually governs. The command-line surface is in :doc:`/usage`.
+This page explains what the Landlock right behind each option governs. The
+command-line surface is in :doc:`/usage`.
 
 The handled mask
 ----------------
 
 A Landlock ruleset is defined by a *handled* mask: the set of access types the
-domain governs. Anything in the mask is **denied by default**; a rule then
-*grants* a specific access on a specific object. Landlock can only subtract
-from what a process could do — it never adds capability.
+domain governs. Anything in the mask is **denied by default**, and a rule then
+*grants* a specific access on a specific object. Landlock only subtracts; it
+never adds capability.
 
-That is why the masks in caged are "everything supported by the ABI", and every
-option either removes a bit from the handled mask (an outright allow) or adds a
-grant rule.
+So the masks in caged are "everything supported by the ABI", and every option
+either removes a bit from the handled mask (an outright allow) or adds a grant
+rule.
 
 Filesystem
 ----------
@@ -27,9 +27,9 @@ Filesystem
      (LANDLOCK_ACCESS_FS_READ_FILE | LANDLOCK_ACCESS_FS_READ_DIR | \
       LANDLOCK_ACCESS_FS_EXECUTE)
 
-``EXECUTE`` is in there because, on a directory, it governs **traversal** —
-being able to walk *through* the directory, not just list it. Without it you
-cannot reach anything deeper.
+``EXECUTE`` is in there because on a directory it governs **traversal**: walking
+*through* the directory, not listing it. Without it you cannot reach anything
+deeper.
 
 ``--rw PATH`` adds the mutating rights (write, remove, make, truncate) and the
 unix-socket lookup right:
@@ -48,7 +48,7 @@ The kernel rejects a ``PATH_BENEATH`` rule on a regular file whose mask
 includes them (``EINVAL``). caged therefore defines ``PERMS_DIRS_ONLY`` and, in
 ``allow_access``, strips those bits when the path is not a directory. As a
 result ``--ro FILE`` becomes ``READ_FILE | EXECUTE`` and ``--rw FILE`` becomes
-``READ_FILE | WRITE_FILE | TRUNCATE`` — a rule on that single file, with no
+``READ_FILE | WRITE_FILE | TRUNCATE``: a rule on that single file, with no
 access to its siblings or its directory.
 
 Network
@@ -67,11 +67,14 @@ A ``NET_PORT`` rule grants one access on **one port**:
      __u64 port;            /* host endianness */
    };
 
-Port ``0`` is special: a rule with port ``0`` and ``BIND_TCP`` matches a
-``bind`` to port 0, which the kernel translates to the ephemeral port range
-(``/proc/sys/net/ipv4/ip_local_port_range``). It does **not** mean "all ports".
-To allow every port in a direction there is no rule wildcard — instead the bit
-is removed from the handled mask (``--allow-connect-tcp`` /
+Port ``0`` is special, and only for ``BIND_TCP``: a rule with port ``0``
+matches a ``bind`` to port 0, which the kernel translates to the ephemeral port
+range (``/proc/sys/net/ipv4/ip_local_port_range``). With ``CONNECT_TCP`` the
+rule port is the destination port, so a port-0 connect rule is accepted by the
+kernel and matches nothing. In neither direction does ``0`` mean "all ports".
+
+To allow every port in a direction there is no rule wildcard: the bit is
+removed from the handled mask instead (``--allow-connect-tcp`` /
 ``--allow-bind-tcp``).
 
 Rules are per port, not per IP: allowing 443 allows connecting to that port on
@@ -87,9 +90,9 @@ IPC scopes
 The ``scoped`` field of the ruleset restricts communication between Landlock
 domains (ABI 6). caged restricts both scopes by default:
 
-- ``LANDLOCK_SCOPE_SIGNAL`` — signalling processes outside the domain.
-- ``LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET`` — connecting to abstract unix
-  sockets outside the domain.
+- ``LANDLOCK_SCOPE_SIGNAL``: signalling processes outside the domain.
+- ``LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET``: connecting to abstract unix sockets
+  outside the domain.
 
 Releasing a scope clears its bit from the ruleset's ``scoped`` mask
 (``get_handled_scopes(abi) & ~opts->released_scopes``). Unlike filesystem and
@@ -117,17 +120,16 @@ seccomp context, so both layers reach the same threads. What makes seccomp a
 problem in the first place is that ``seccomp_load`` filters the calling thread,
 and inheritance only goes downwards, so threads that already exist in the
 thread group would keep running unfiltered. Two differences from Landlock are
-worth knowing: the seccomp attribute has no ABI gate (it needs libseccomp API
-level 2 / kernel 3.17, and if unavailable the setup fails with
-``CAGED_ERR_SECCOMP_TSYNC``), and a failed synchronization makes
-``seccomp_load`` return the tid of the offending thread — a *positive* value —
-instead of ``-1``, which is why the load is checked against zero.
+worth knowing. The seccomp attribute has no ABI gate: it needs libseccomp API
+level 2 / kernel 3.17, and if it is unavailable the setup fails with
+``CAGED_ERR_SECCOMP_TSYNC``. And a failed synchronization makes
+``seccomp_load`` return the tid of the offending thread, a *positive* value
+instead of ``-1``, so the load is checked against zero.
 
 Neither layer can reach a sibling **process** (another thread group, from a
-``fork``): a domain only descends the tree of descendants. Confining those is
-the caller's job — apply the sandbox before forking, as ``caged`` itself does
-in ``main``.
-
+``fork``), because a domain only descends the tree of descendants. Confining
+those is the caller's job: apply the sandbox before forking, as ``caged``
+itself does in ``main``.
 
 System V IPC
 ------------
@@ -139,9 +141,9 @@ sandbox leaves them wide open.
 
 ``--allow-sysv-ipc`` therefore belongs to the **seccomp** layer, not to
 Landlock: without it, ``msgget``, ``semget``, ``shmget`` and every operation on
-an existing object fail with ``ENOSYS``. The action is ``ENOSYS`` rather than
-``EACCES`` on purpose — it is the error a program expects from a kernel built
-without SysV IPC, so callers fall back gracefully instead of aborting.
+an existing object fail with ``ENOSYS``. The action is ``ENOSYS`` and not
+``EACCES`` because that is the error a program expects from a kernel built
+without SysV IPC, so callers fall back instead of aborting.
 
 Two related gaps stay open, and neither is seccomp's job:
 
@@ -149,4 +151,5 @@ Two related gaps stay open, and neither is seccomp's job:
   interface: it lives in ``/dev/shm`` and ``/dev/mqueue``, so the ``--ro`` /
   ``--rw`` grants already cover it.
 - **File descriptors already open** on a SysV object are not revoked by the
-  filter; ``close_range`` is the other half, and it is not implemented yet.
+  filter. ``close_range`` is the other half, and it runs at the end of the
+  setup.

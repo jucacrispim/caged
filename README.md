@@ -1,8 +1,9 @@
 # Caged
 
 Caged is a small process sandbox for Linux built on top of
-[Landlock](https://www.kernel.org/doc/html/latest/userspace-api/landlock.html)
-and [seccomp](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html).
+[Landlock](https://www.kernel.org/doc/html/latest/userspace-api/landlock.html),
+[seccomp](https://www.kernel.org/doc/html/latest/userspace-api/seccomp_filter.html)
+and  [namespaces](https://www.man7.org/linux/man-pages/man7/namespaces.7.html).
 It locks a process (and its children) denying everything by
 default and granting only what is explicitly allowed.
 
@@ -11,37 +12,6 @@ caged [OPTIONS] -- CMD [ARGS...]
 ```
 
 `--` separates caged's options from the command to run (via `execvp`).
-
-## Features
-
-- **Filesystem**: denied by default. grant read (`--ro`) or read+write (`--rw`)
-  on a directory *or a single file*.
-- **Network**: denied by default; grant per port
-  (`--allow-connect-port` / `--allow-bind-port`, port `0` = ephemeral range)
-  or a whole direction (`--allow-connect-tcp` / `--allow-bind-tcp`). A TCP
-  connection also needs its socket family, so pair these with
-  `--allow-network-sockets`.
-- **IPC scopes**: signalling and abstract unix sockets are restricted by
-  default; release them with `--allow-scoped-signal` /
-  `--allow-scoped-abstract-unix`.
-- **System V IPC**: denied by default (shared memory, message queues and
-  semaphores fail with `ENOSYS`); release it with `--allow-sysv-ipc`.
-- **Limits and descriptors**: core dumps are disabled and inherited file
-  descriptors above stderr are closed before the command runs; `--max-procs
-  N` caps `RLIMIT_NPROC`.
-- **Dangerous syscalls**: `ptrace`, `process_vm_*`, `pidfd_getfd`, `kcmp`,
-  `keyctl`/`add_key`/`request_key`, `io_uring_setup`, `bpf`,
-  `perf_event_open` and `userfaultfd` always fail with `ENOSYS`.
-- **ABI floor**: `--require-abi N` turns the "your kernel is older than this
-  feature" warning into a failure, so the policy is never silently weaker than
-  asked for.
-- **Environment**: cleared by default — only `PATH`, `HOME`, `LANG`,
-  `LANGUAGE` and the `LC_*` categories are inherited. Use `--keep-env` for
-  everything, or `--env NAME=VALUE` to set a single variable.
-- **Socket families**: every family except `AF_INET`, `AF_INET6` and
-  `AF_NETLINK` is denied, including `AF_UNIX`; release them with
-  `--allow-network-sockets` / `--allow-unix-sockets`. Raw sockets
-  are always denied.
 
 
 ## Build
@@ -74,8 +44,7 @@ With only `/etc/hostname` granted, `cat` would fail to start. Also note that
 `--ro /etc/hostname` grants that single file: every other file under `/etc`
 stays unreadable.
 
-A minimal interactive shell — the system trees holding programs and their
-shared libraries are read-only:
+A minimal interactive shell:
 
 ```sh
 ./build/caged --ro /usr --ro /bin --ro /usr/lib -- sh
@@ -87,8 +56,20 @@ Add a writable scratch directory when the shell needs to write:
 ./build/caged --ro /usr --ro /bin --ro /usr/lib --rw /tmp -- sh
 ```
 
-Fetch a page over HTTPS — the network is denied unless the socket family and
-the port are allowed:
+Or give it a `/tmp` of its own, a fresh tmpfs, to avoid writing on the global
+`/tmp` directory:
+
+```sh
+./build/caged --ro /usr --ro /bin --ro /usr/lib --private-tmp --rw /tmp -- sh
+```
+
+`--private-shm` does the same for `/dev/shm`:
+
+```sh
+./build/caged --ro /usr --ro /bin --ro /usr/lib --private-shm --rw /dev/shm -- sh
+```
+
+Fetch a page over HTTPS:
 
 ```sh
 ./build/caged --ro /usr --ro /bin --ro /usr/lib --ro /etc \
@@ -102,8 +83,7 @@ Serve a directory on a fixed local port:
       --allow-network-sockets --allow-bind-port 8080 -- python3 -m http.server 8080
 ```
 
-Talk to a local service over a unix socket — unix sockets are denied by
-default:
+Talk to a local service over a unix socket:
 
 ```sh
 ./build/caged --ro /usr --ro /bin --ro /usr/lib --allow-unix-sockets \

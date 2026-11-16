@@ -110,9 +110,9 @@ struct caged_opts {
     Give the command a network namespace of its own, holding nothing but a
     working loopback interface: no route, no external address, no way to
     reach the host's (or another sandbox's) localhost. It is orthogonal to
-    allow_network_sockets on purpose — without the address family released
-    the command cannot even create the socket, and releasing the family
-    without this option still means "the whole network".
+    allow_network_sockets: without the address family released the command
+    cannot even create the socket, and releasing the family without this
+    option still means "the whole network".
   */
   int loopback_only;
   /*
@@ -122,8 +122,8 @@ struct caged_opts {
 
     It does not grant anything: without --rw /tmp the command still cannot
     use it. What the option changes is which directory that grant resolves
-    against, which is what makes --rw /tmp safe (on the host it would be the
-    shared, world-writable /tmp).
+    against, so --rw /tmp names the private /tmp instead of the shared,
+    world-writable one.
   */
   int private_tmp;
   /*
@@ -138,9 +138,9 @@ struct caged_opts {
     the host (and of every other sandbox) stops being reachable from inside,
     which is what --rw /dev/shm would otherwise expose.
 
-    There is no bind form on purpose: a /dev/shm shared with the host is the
-    file exchange --private-tmp PATH exists for, and sharing it defeats the
-    point of the option.
+    There is no bind form: a /dev/shm shared with the host is the file
+    exchange --private-tmp PATH exists for, and sharing it defeats the point
+    of the option.
 
     Like private_tmp it grants nothing: without --rw /dev/shm the command
     still cannot use the directory. What changes is which directory that
@@ -220,8 +220,8 @@ void caged_opts_free(struct caged_opts *opts);
   before a command (--help, or a usage error). It points into argv, so
   nothing is allocated and nothing has to be freed.
 
-  The command lives outside struct caged_opts on purpose: caged_setup never
-  looks at it, only the front end that execs it does.
+  The command lives outside struct caged_opts: caged_setup never looks at it,
+  only the front end that execs it does.
 
   Returns 0 on success, -1 on a usage error.
 */

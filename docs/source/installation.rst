@@ -1,6 +1,14 @@
 Build
 =====
 
+First clone the code:
+
+.. code-block::
+
+   git clone https://github.com/jucacrispim/caged
+
+And then compile the code.
+
 Building caged
 --------------
 

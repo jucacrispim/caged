@@ -5,7 +5,7 @@ caged is split along a library / command-line boundary: ``caged.c`` is the
 sandbox and ``caged.h`` its public interface, while ``cli.c`` / ``cli.h`` and
 ``main.c`` make the executable. A program can link the library and wrap
 **its own process** in the sandbox at launch, which is the original reason for
-the split — see :doc:`internals/architecture` for how the pieces fit and
+the split. See :doc:`internals/architecture` for how the pieces fit and
 :doc:`internals/rules` for what each right means.
 
 Building
@@ -82,7 +82,7 @@ What ``caged_setup`` changes
 ----------------------------
 
 Everything it does is **one-way** and applies to the calling process. It
-cannot be undone, and it cannot be applied twice — a second Landlock domain
+cannot be undone, and it cannot be applied twice: a second Landlock domain
 would intersect with the first one. Call it as late as possible in your
 startup, once the sandbox's own inputs are known, and:
 
@@ -100,7 +100,7 @@ group) is out of reach for both layers: the sandbox only descends the tree of
 descendants. Confine each process at its own launch instead.
 
 Filling ``struct caged_opts``
----------------------------
+-----------------------------
 
 Every field mirrors a command-line option; see :doc:`usage` for the semantics.
 
@@ -118,10 +118,10 @@ Every field mirrors a command-line option; see :doc:`usage` for the semantics.
      - Read+write grants.
    * - ``connect_ports``, ``n_connect``
      - ``--allow-connect-port``
-     - One ``NET_PORT`` connect rule per port (``0`` = ephemeral range).
+     - One ``NET_PORT`` connect rule per port, for the destination port.
    * - ``bind_ports``, ``n_bind``
      - ``--allow-bind-port``
-     - One ``NET_PORT`` bind rule per port.
+     - One ``NET_PORT`` bind rule per port (``0`` = ephemeral range).
    * - ``released_net``
      - ``--allow-connect-tcp`` / ``--allow-bind-tcp``
      - Bits cleared from ``handled_access_net``: the whole direction, any port.
@@ -141,6 +141,22 @@ Every field mirrors a command-line option; see :doc:`usage` for the semantics.
    * - ``allow_sysv_ipc``
      - ``--allow-sysv-ipc``
      - Keeps the SysV IPC denials out of the filter.
+   * - ``loopback_only``
+     - ``--loopback-only``
+     - Builds a user and a network namespace for the command and brings
+       loopback up inside it. Orthogonal to ``allow_network_sockets``.
+   * - ``private_tmp`` / ``private_tmp_src``
+     - ``--private-tmp [PATH]``
+     - Builds a mount namespace with a private ``/tmp``: a 1 GiB tmpfs, or the
+       ``private_tmp_src`` directory bind-mounted over it when it is not
+       ``NULL``. Pair it with a ``/tmp`` entry in ``rw_dir``. The source
+       points into the caller's memory and is not freed by
+       ``caged_opts_free``.
+   * - ``private_shm``
+     - ``--private-shm``
+     - Mounts a 1 GiB tmpfs over ``/dev/shm`` in the same mount namespace
+       ``private_tmp`` uses (a single ``unshare(CLONE_NEWNS)`` for both). Pair
+       it with a ``/dev/shm`` entry in ``rw_dir``.
    * - ``max_procs``
      - ``--max-procs``
      - ``RLIMIT_NPROC``; ``0`` leaves the limit alone.
@@ -154,6 +170,11 @@ Every field mirrors a command-line option; see :doc:`usage` for the semantics.
    * - ``env``, ``n_env``
      - ``--env``
      - ``NAME=VALUE`` entries, applied last, compared by name.
+
+The three namespace fields (``loopback_only``, ``private_tmp`` and
+``private_shm``) share the same requirements: they need a single-threaded
+caller and a usable ``/proc`` during the setup, and they fail closed. None of
+them grants anything by itself.
 
 The ``cap_*`` fields, ``cmd`` and ``help`` belong to the parser (``cli.c``) and
 are ignored by ``caged_setup``.
@@ -174,7 +195,7 @@ The last parameter of ``caged_setup`` is optional (``NULL`` is fine):
 - anything else is removed from the calling process's ``environ``.
 
 When it is not ``NULL``, ``*env`` receives the same set as a NULL-terminated
-array — pass it to ``execvpe``; plain ``execvp`` uses the already-filtered
+array. Pass it to ``execvpe``; plain ``execvp`` uses the already-filtered
 ``environ``. The caller **owns** the array and frees it with ``free()``; it is
 set to ``NULL`` if the setup fails. Note that ``execvpe`` searches for the
 program with the *caller's* ``PATH``, not with the array it is given.

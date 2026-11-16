@@ -35,13 +35,12 @@
 
 /*
   Exit status 125 means "caged itself failed": the sandbox could not be built
-  or the command could not be executed. 2 is the usage error and 125 is the
-  sh/docker/sudo convention for "the wrapper failed".
+  or the command could not be executed. It is the sh/docker/sudo convention for
+  "the wrapper failed", and 2 is the usage error returned by main itself.
 
-  Neither status can ever be reserved, though: the command shares them, and a
-  command may legitimately exit with 2 or 125. The proof is --report-fd, the
-  descriptor report_line() writes every diagnostic of ours to (and nothing
-  when the setup succeeded), so a wrapper that passed it never has to guess.
+  The command shares the status space, so no status can be reserved. A wrapper
+  that needs certainty passes --report-fd, where report_line() writes every
+  diagnostic of ours and nothing when the setup succeeded.
 */
 #define EXIT_SETUP_FAILED 125
 

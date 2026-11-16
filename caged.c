@@ -251,7 +251,7 @@ void caged_opts_free(struct caged_opts *opts) {
 
 /*
   Creates a new landlock ruleset.
-  By default it denies permission for all the handled acesses.
+  By default it denies permission for all the handled accesses.
   The handled accesses are held by the *attr pointer
 */
 static long create_ruleset(const struct landlock_ruleset_attr *attr) {
@@ -259,7 +259,7 @@ static long create_ruleset(const struct landlock_ruleset_attr *attr) {
                  sizeof(struct landlock_ruleset_attr), 0);
 }
 
-/* Adds an exception (grants access) on the ruleset for the given acesses.
+/* Adds an exception (grants access) on the ruleset for the given accesses.
    The accesses for the grants are held by the *pb pointer
  */
 static long add_rule(int ruleset_fd,
@@ -947,8 +947,8 @@ static enum caged_return setup_netns(void) {
 /*
   Builds the namespaces the command will run in.
 
-  First create the usernamespace and after that
-  create the mounts for /tmp e /dev/shm and the
+  First create the user namespace and after that
+  create the mounts for /tmp and /dev/shm and the
   net namespace for loopback
 */
 static enum caged_return setup_namespaces(int private_tmp,
@@ -990,7 +990,7 @@ static enum caged_return setup_namespaces(int private_tmp,
 }
 
 /*
-  Closes every file descriptor inherited above stderr, except `report_fd.
+  Closes every file descriptor inherited above stderr, except report_fd.
 */
 static int close_inherited_fds(int report_fd) {
   if (report_fd < 3) {
@@ -1077,7 +1077,7 @@ const char *caged_strreturn(enum caged_return r) {
   Creates the sandbox. If return != CAGED_OK the process must be terminated
   with an error.
 
-  Use Caged_strreturn for a sane message.
+  Use caged_strreturn for a sane message.
 */
 enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
   if (env != NULL) {
