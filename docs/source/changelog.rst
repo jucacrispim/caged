@@ -1,12 +1,12 @@
 Changelog
 =========
 
-Unreleased
-----------
+v0.7.0
+------
 
-Four changes are pending: three new options that build namespaces for the
-command (a private ``/tmp``, a private ``/dev/shm`` and a private network), and
-a closed seccomp denylist.
+Seventh release. Three new options give the command namespaces of its own (a
+private ``/tmp``, a private ``/dev/shm`` and a private network), the seccomp
+denylist was closed, and the public interface got a naming pass.
 
 ``--private-tmp``
 ~~~~~~~~~~~~~~~~~
@@ -70,6 +70,21 @@ combined.
 Breaking changes
 ~~~~~~~~~~~~~~~~
 
+- ``struct cmd_opts`` is now ``struct caged_opts``, and ``cmd_opts_free`` is
+  now ``caged_opts_free``. An embedder updates the type name and the call and
+  recompiles; a wrapper that only runs the ``caged`` binary is unaffected. The
+  fields, their meaning and the ``caged_setup`` / ``caged_strreturn`` /
+  ``enum caged_return`` interface are untouched. The rest of the public
+  surface already carried the ``caged_`` prefix, and ``parse_cmd_line`` fills
+  the same struct an embedder fills by hand, so two prefixes in one header
+  only invited the guess that ``cmd_`` marked a front-end-only type.
+- ``struct caged_opts`` lost the ``cmd`` field. ``parse_cmd_line`` now takes
+  the command as its last parameter, ``char ***cmd``: a pointer to the
+  NULL-terminated ``argv`` tail after ``--``, or ``NULL`` when the parse stops
+  before a command (``--help``, or a usage error). Nothing is allocated, so
+  nothing is freed. ``cmd`` was the only field ``caged_setup`` never read: it
+  existed for the ``main`` that ``execvpe``\s, and a field the library never
+  reads does not belong in the library's struct.
 - ``enum caged_return`` gained ``CAGED_ERR_USERNS_UNAVAILABLE``,
   ``CAGED_ERR_USERNS_MAP``, ``CAGED_ERR_NETNS``, ``CAGED_ERR_CAPABILITIES``
   and (for ``--private-tmp`` and ``--private-shm``) ``CAGED_ERR_MOUNT``. They
@@ -86,6 +101,23 @@ Breaking changes
   host without unprivileged user namespaces ``--loopback-only`` fails at the
   ``unshare``, before any ruleset exists. Nothing changes for runs that do not
   use the option.
+
+Upgrading
+~~~~~~~~~
+
+- Replace ``struct cmd_opts`` with ``struct caged_opts`` (declarations,
+  definitions, pointers and casts) and ``cmd_opts_free`` with
+  ``caged_opts_free``. The rename is mechanical: ``sed -i
+  's/cmd_opts/caged_opts/g' your_sources`` covers it.
+- Embedders are not affected by the ``cmd`` change unless they drive
+  ``parse_cmd_line``: they never filled ``cmd`` (they keep their own array for
+  ``exec``). A caller of ``parse_cmd_line`` adds the parameter,
+  ``parse_cmd_line(argc, argv, &opts, &cmd)``, or passes ``NULL`` when it only
+  wants the options, as the unit tests mostly do. The front end in ``main.c``
+  is the example to copy.
+- The three namespace fields sit in the middle of the struct, so a positional
+  initializer has to be updated and a designated one needs nothing. A caller
+  that switches on ``enum caged_return`` gets the new cases from ``-Wswitch``.
 
 Seccomp denylist
 ~~~~~~~~~~~~~~~~
@@ -151,50 +183,6 @@ Internal
   ``cli_internal.h``. The tests link the objects instead of including the
   sources. ``libcaged.a`` now exports them, which is a naming choice and not a
   hidden interface (see ``library.rst``). No public symbol changed.
-
-v0.7.0
-------
-
-Seventh release. No behaviour change: same command-line options, same policy,
-same fields. It is the naming pass that lines the public interface up with
-itself.
-
-Breaking changes
-~~~~~~~~~~~~~~~~
-
-- ``struct cmd_opts`` is now ``struct caged_opts``, and ``cmd_opts_free`` is
-  now ``caged_opts_free``. An embedder updates the type name and the call and
-  recompiles; a wrapper that only runs the ``caged`` binary is unaffected.
-  The fields, their meaning and the ``caged_setup`` / ``caged_strreturn`` /
-  ``enum caged_return`` interface are untouched.
-- Why: the rest of the public surface already carries the ``caged_`` prefix
-  (``caged_setup``, ``caged_strreturn``, ``caged_return``, ``caged.h``),
-  while the options struct and its destructor carried a ``cmd_`` prefix that
-  described the command-line front end and not the library. Two prefixes in
-  one header invite the guess that ``cmd_`` marks a front-end-only type; it
-  does not — ``parse_cmd_line`` fills the same struct the embedder fills by
-  hand.
-- ``struct caged_opts`` lost the ``cmd`` field. ``parse_cmd_line`` now takes
-  the command as its last parameter, ``char ***cmd``: it receives a pointer to
-  the NULL-terminated ``argv`` tail after ``--``, or stays ``NULL`` when the
-  parse stops before a command (``--help``, or a usage error). Nothing is
-  allocated, so nothing is freed. ``cmd`` was the only field ``caged_setup``
-  never read — it existed for the ``main`` that ``execvpe``\s — and a field
-  nothing in the library reads does not belong in the library's struct.
-
-Upgrading
-~~~~~~~~~
-
-- Replace ``struct cmd_opts`` with ``struct caged_opts`` (declarations,
-  definitions, pointers and casts) and ``cmd_opts_free`` with
-  ``caged_opts_free``. The rename is mechanical: ``sed -i
-  's/cmd_opts/caged_opts/g' your_sources`` covers it.
-- Embedders are not affected by the ``cmd`` change unless they drive
-  ``parse_cmd_line``: they never filled ``cmd`` (they keep their own array for
-  ``exec``). A caller of ``parse_cmd_line`` adds the parameter —
-  ``parse_cmd_line(argc, argv, &opts, &cmd)`` — or passes ``NULL`` when it only
-  wants the options, as the unit tests mostly do. The front end in ``main.c``
-  is the example to copy.
 
 v0.6.0
 ------
