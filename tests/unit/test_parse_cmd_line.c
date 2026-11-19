@@ -1067,7 +1067,29 @@ void test_report_fd_prescan_rejects_bad_values(void) {
   }
 }
 
+static void test_mount_ro(void) {
+  struct caged_opts opts = {0};
+  char *argv[] = {"caged", "--mount-ro", "/one", "--mount-ro", "/two",
+                  "--", "sh", NULL};
+  char *missing[] = {"caged", "--mount-ro", "--", "sh", NULL};
+
+  reset_fake();
+  assert(parse_cmd_line(2, argv, &opts, NULL) < 0);
+  assert(parse_cmd_line(4, missing, &opts, NULL) < 0);
+  fake.fail_realloc = 1;
+  fake.realloc_err = ENOMEM;
+  assert(parse_cmd_line(7, argv, &opts, NULL) < 0);
+  assert(opts.n_mount_ro == 0);
+  reset_fake();
+  assert(parse_cmd_line(7, argv, &opts, NULL) >= 0);
+  assert(opts.n_mount_ro == 2);
+  assert(strcmp(opts.mount_ro[0], "/one") == 0);
+  assert(strcmp(opts.mount_ro[1], "/two") == 0);
+  caged_opts_free(&opts);
+}
+
 int main(void) {
+  test_mount_ro();
   test_ro_only_one_value();
   test_rw_only_one_value();
   test_rw_ro_multiple_values();

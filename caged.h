@@ -147,6 +147,9 @@ struct caged_opts {
     grant resolves against.
   */
   int private_shm;
+  const char **mount_ro;
+  int n_mount_ro;
+  int cap_mount_ro;
   long max_procs;
   long require_abi;
   int keep_env;

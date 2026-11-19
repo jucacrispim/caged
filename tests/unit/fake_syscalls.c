@@ -109,6 +109,14 @@ long __wrap_syscall(long num, ...) {
     That makes it the one piece of the namespace setup left in this switch;
     unshare, socket and ioctl have wrappers and are faked as such below.
   */
+  case SYS_mount_setattr:
+    fake.mount_setattr_calls++;
+    ret = 0;
+    if (fake.mount_setattr_err) {
+      errno = fake.mount_setattr_err;
+      ret = -1;
+    }
+    break;
   case SYS_capset: {
     struct __user_cap_header_struct *header = va_arg(ap, void *);
     struct __user_cap_data_struct *data = va_arg(ap, void *);

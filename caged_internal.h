@@ -182,8 +182,10 @@ enum caged_return caged_setup_private_tmp(const char *src);
 enum caged_return caged_setup_private_shm(void);
 enum caged_return caged_setup_netns(void);
 enum caged_return caged_setup_namespaces(int private_tmp,
-                                         const char *private_tmp_src,
-                                         int private_shm, int loopback_only);
+                                        const char *private_tmp_src,
+                                        int private_shm, int loopback_only,
+                                        const char *const *mount_ro,
+                                        int n_mount_ro);
 
 /* Steps of the setup that do not belong to a single subsystem. */
 int caged_set_limit(int resource, rlim_t value);

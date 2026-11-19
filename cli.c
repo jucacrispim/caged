@@ -113,6 +113,7 @@ void print_help(FILE *out) {
       "                                 namespace with only loopback up\n"
       "  --private-tmp [PATH]           give the command its own /tmp: a fresh\n"
       "                                 1G tmpfs, or PATH bind-mounted on it\n"
+      "  --mount-ro PATH               mount PATH read-only (repeatable)\n"
       "  --private-shm                  give the command its own /dev/shm (1G\n"
       "                                 tmpfs)\n"
       "  --max-procs N                  set RLIMIT_NPROC to N (default: no "
@@ -346,6 +347,15 @@ int parse_cmd_line(int argc, char *argv[], struct caged_opts *opts,
         opts->private_tmp_src = argv[i];
         i += 1;
       }
+    } else if (strcmp(argv[i], "--mount-ro") == 0) {
+      if (i + 1 >= argc || argv[i + 1][0] == '-') {
+        return fatal("--mount-ro must have a path");
+      }
+      if (caged_push_path(&opts->mount_ro, &opts->n_mount_ro,
+                          &opts->cap_mount_ro, argv[i + 1]) < 0) {
+        return fatal("out of memory");
+      }
+      i += 2;
     } else if (strcmp(argv[i], "--private-shm") == 0) {
       opts->private_shm = 1;
       i += 1;

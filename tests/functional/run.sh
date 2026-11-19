@@ -717,6 +717,22 @@ print('ok' if 1000 * 1024 * 1024 <= total <= 1024 ** 3 else total)
 # and --rw /dev/shm on the host reaches every other process of the session.
 
 # /dev/shm is writable when it is granted
+test_mount_ro() {
+  if skip_no_userns "mount-ro: protects a subtree under --rw"; then
+    mount_root=$(mktemp -d)
+    mkdir "$mount_root/protected"
+    CAGED_DISABLE_WARNINGS=1 $CAGED $RO --rw "$mount_root" \
+      --mount-ro "$mount_root/protected" -- sh -c '
+        if (printf blocked > "$1/protected/file"); then exit 1; fi
+        printf allowed > "$1/sibling"
+      ' sh "$mount_root" 2>/dev/null
+    check "mount-ro: blocks only the protected subtree" 0 "$?"
+    printf host > "$mount_root/protected/file"
+    check "mount-ro: host can still write" 0 "$?"
+    rm -rf "$mount_root"
+  fi
+}
+
 test_private_shm_writes() {
   if ! skip_no_userns "private-shm: /dev/shm is writable when granted"; then
     return
@@ -1129,6 +1145,7 @@ main() {
   test_private_tmp_bind_source
   test_private_tmp_without_rw_is_denied
   test_private_tmp_tmpfs_size
+  test_mount_ro
   test_private_shm_writes
   test_private_shm_hides_host_shm
   test_private_shm_does_not_leak_to_host

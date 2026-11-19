@@ -32,6 +32,13 @@ Filesystem
     tmpfs (1 GiB, mode 1777). With ``PATH``, ``PATH`` is bind mounted over
     ``/tmp``. See `Private /tmp`_.
 
+``--mount-ro PATH``
+   Mount an existing path read-only, including mounts below it. Repeat this
+   option for each path. Unlike ``--ro``, this blocks writes even under a
+   ``--rw`` grant. It does not grant read access or protect writable aliases.
+   The mount only affects the command's namespace. This requires Linux 5.12
+   or later. If setup fails, caged does not run the command.
+
 ``--private-shm``
     Give the command a ``/dev/shm`` of its own: a new tmpfs (1 GiB, mode
     1777), in the same mount namespace ``--private-tmp`` uses. See

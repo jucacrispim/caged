@@ -45,6 +45,7 @@ void caged_opts_free(struct caged_opts *opts) {
   free(opts->connect_ports);
   free(opts->bind_ports);
   free(opts->env);
+  free(opts->mount_ro);
   opts->r_dir = NULL;
   opts->rw_dir = NULL;
   opts->connect_ports = NULL;
@@ -197,10 +198,11 @@ enum caged_return caged_setup(const struct caged_opts *opts, char ***env) {
     filesystem policy has to be built against the /tmp and /dev/shm the
     command will actually see.
   */
-  if (opts->loopback_only || opts->private_tmp || opts->private_shm) {
-    enum caged_return ns =
-        caged_setup_namespaces(opts->private_tmp, opts->private_tmp_src,
-                               opts->private_shm, opts->loopback_only);
+  if (opts->loopback_only || opts->private_tmp || opts->private_shm ||
+      opts->n_mount_ro > 0) {
+    enum caged_return ns = caged_setup_namespaces(
+        opts->private_tmp, opts->private_tmp_src, opts->private_shm,
+        opts->loopback_only, opts->mount_ro, opts->n_mount_ro);
     if (ns != CAGED_OK) {
       return ns;
     }

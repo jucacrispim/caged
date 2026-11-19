@@ -1594,7 +1594,40 @@ void test_warn_disabled_by_switch(void) {
   caged_warnings_disabled = 0;
 }
 
+static void test_setup_mount_ro(void) {
+  const char *paths[] = {"/one", "/two"};
+  struct caged_opts opts = {.mount_ro = paths, .n_mount_ro = 2};
+
+  setup_reaches_seccomp();
+  assert(caged_setup(&opts, NULL) == CAGED_OK);
+  assert(fake.unshare_calls_count == 2);
+  assert(fake.mount_calls_count == 3);
+  assert(fake.mount_setattr_calls == 2);
+  for (int i = 0; i < 2; i++) {
+    assert(strcmp(fake.mount_sources[i + 1], paths[i]) == 0);
+    assert(strcmp(fake.mount_targets[i + 1], paths[i]) == 0);
+    assert(fake.mount_flags[i + 1] == (MS_BIND | MS_REC));
+  }
+
+  setup_reaches_seccomp();
+  fake.mount_ret = -1;
+  fake.mount_err = ENOENT;
+  fake.mount_fail_at = 2;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(fake.mount_calls_count == 2);
+  assert(fake.mount_setattr_calls == 0);
+  assert(fake.create_calls_count == 0);
+
+  setup_reaches_seccomp();
+  fake.mount_setattr_err = ENOSYS;
+  assert(caged_setup(&opts, NULL) == CAGED_ERR_MOUNT);
+  assert(fake.mount_calls_count == 2);
+  assert(fake.mount_setattr_calls == 1);
+  assert(fake.create_calls_count == 0);
+}
+
 int main(void) {
+  test_setup_mount_ro();
   test_setup_ok();
   test_setup_released_net_general();
   test_setup_net_port_rules();

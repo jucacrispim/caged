@@ -122,6 +122,8 @@ struct fake_context {
   int mount_ret;
   int mount_err;
   int mount_fail_at;
+  int mount_setattr_calls;
+  int mount_setattr_err;
   int socket_fd;
   int socket_err;
   int ioctl_ret;

@@ -227,6 +227,20 @@ enum caged_return caged_setup_netns(void) {
   return CAGED_OK;
 }
 
+static enum caged_return caged_setup_mount_ro(const char *path) {
+  struct mount_attr attr = {.attr_set = MOUNT_ATTR_RDONLY};
+  /* First we bind mount */
+  if (mount(path, path, NULL, MS_BIND | MS_REC, NULL) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  /* then we make it read only */
+  if (syscall(SYS_mount_setattr, AT_FDCWD, path, AT_RECURSIVE, &attr,
+              sizeof attr) < 0) {
+    return CAGED_ERR_MOUNT;
+  }
+  return CAGED_OK;
+}
+
 /*
   Builds the namespaces the command will run in.
 
@@ -236,13 +250,15 @@ enum caged_return caged_setup_netns(void) {
 */
 enum caged_return caged_setup_namespaces(int private_tmp,
                                          const char *private_tmp_src,
-                                         int private_shm, int loopback_only) {
+                                         int private_shm, int loopback_only,
+                                         const char *const *mount_ro,
+                                         int n_mount_ro) {
   enum caged_return r = caged_setup_userns();
 
   if (r != CAGED_OK) {
     return r;
   }
-  if (private_tmp || private_shm) {
+  if (private_tmp || private_shm || n_mount_ro > 0) {
     r = caged_setup_mountns();
     if (r != CAGED_OK) {
       return r;
@@ -256,6 +272,12 @@ enum caged_return caged_setup_namespaces(int private_tmp,
   }
   if (private_shm) {
     r = caged_setup_private_shm();
+    if (r != CAGED_OK) {
+      return r;
+    }
+  }
+  for (int i = 0; i < n_mount_ro; i++) {
+    r = caged_setup_mount_ro(mount_ro[i]);
     if (r != CAGED_OK) {
       return r;
     }
