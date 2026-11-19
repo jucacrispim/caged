@@ -1,6 +1,14 @@
 Changelog
 =========
 
+v0.8.0
+------
+
+Add ``--mount-ro PATH`` to mount a path and its submounts read-only.
+Repeat the option to protect multiple paths, including paths under ``--rw``.
+The mount applies only to the command's namespace and grants no read access.
+This option requires Linux 5.12 or later.
+
 v0.7.0
 ------
 

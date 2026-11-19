@@ -288,8 +288,7 @@ keyrings or over the kernel. Landlock has no right for any of them, so seccomp
 denies them all with ``ENOSYS``. That error makes libraries fall back to
 another path instead of failing hard.
 
-``ptrace``, ``process_vm_readv``, ``process_vm_writev``, ``pidfd_getfd``,
-``process_madvise``, ``process_mrelease``, ``kcmp``
+``ptrace``, ``process_vm_readv``, ``process_vm_writev``, ``pidfd_getfd``, ``process_madvise``, ``process_mrelease``, ``kcmp``
     Reading or writing another process's memory, or taking one of its file
     descriptors, needs only the same uid (subject to Yama). Nothing in Landlock
     covers it, and a descriptor taken from a process outside the sandbox
@@ -310,17 +309,13 @@ another path instead of failing hard.
     socket family rule. Denying the setup call makes ``liburing`` fall back to
     normal synchronous I/O.
 
-``init_module``, ``finit_module``, ``delete_module``, ``kexec_load``,
-``kexec_file_load``, ``reboot``, ``swapon``, ``swapoff``, ``acct``,
-``quotactl``, ``iopl``, ``ioperm``, ``modify_ldt``, ``open_by_handle_at``
+``init_module``, ``finit_module``, ``delete_module``, ``kexec_load``, ``kexec_file_load``, ``reboot``, ``swapon``, ``swapoff``, ``acct``, ``quotactl``, ``iopl``, ``ioperm``, ``modify_ldt``, ``open_by_handle_at``
     Loading code into the kernel, taking the machine down, and the legacy
     hardware and accounting interfaces. All of them already need a privilege
     the sandbox does not have. Denying them covers a relaxed sysctl or a
     capability leak.
 
-``unshare``, ``setns``, ``mount``, ``umount2``, ``pivot_root``, ``chroot``,
-``move_mount``, ``open_tree``, ``fsopen``, ``fsconfig``, ``fsmount``,
-``fspick``, ``mount_setattr``
+``unshare``, ``setns``, ``mount``, ``umount2``, ``pivot_root``, ``chroot``, ``move_mount``, ``open_tree``, ``fsopen``, ``fsconfig``, ``fsmount``, ``fspick``, ``mount_setattr``
     Mounting and namespaces. A new mount namespace is a new view of the
     filesystem, so a bind mount or an overmount there undoes the filesystem
     policy from the inside. That makes this the way around everything above.
